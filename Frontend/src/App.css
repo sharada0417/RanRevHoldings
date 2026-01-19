@@ -1,0 +1,42 @@
+/* index.css */
+@font-face {
+  font-family: "FMArjunn";
+  src: url("/font/FMArjunn.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "FMDerana";
+  src: url("/font/FMDerana.ttf") format("truetype");
+  font-weight: 400;
+  font-size: 30;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "FMGemunu";
+  src: url("/font/FMGemunu.ttf") format("truetype");
+  font-weight: 400;
+  font-size: 30;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* classes you can use in components */
+.text-arjunn {
+  font-family: "FMArjunn", "Noto Sans Sinhala", sans-serif;
+  font-size: 24px;
+}
+
+.text-derana {
+  font-family: "FMDerana", "Noto Sans Sinhala", sans-serif;
+  font-size: 24px;
+}
+
+.text-gemunu {
+  font-family: "FMGemunu", "Noto Sans Sinhala", sans-serif;
+  font-size: 24px;
+}

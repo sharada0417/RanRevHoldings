@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* register fonts (public/font/*) */
+@font-face {
+  font-family: "FMArjunn";
+  src: url("/font/FMArjunn.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "FMDerana";
+  src: url("/font/FMDerana.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "FMGemunu";
+  src: url("/font/FMGemunu.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* optional helper class if you prefer plain CSS usage */
+.fm-gemunu {
+  font-family: "FMGemunu", "Noto Sans Sinhala", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
