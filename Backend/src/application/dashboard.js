@@ -30,12 +30,6 @@ const getRange = ({ year, month, granularity }) => {
   return { start, end };
 };
 
-const groupKey = (granularity) => {
-  if (granularity === "day") return { y: { $year: "$createdAt" }, m: { $month: "$createdAt" }, d: { $dayOfMonth: "$createdAt" } };
-  if (granularity === "month") return { y: { $year: "$createdAt" }, m: { $month: "$createdAt" } };
-  return { y: { $year: "$createdAt" } };
-};
-
 const buildLabels = ({ granularity, year, month }) => {
   if (granularity === "day") {
     const m = Math.min(12, Math.max(1, month));
@@ -46,16 +40,24 @@ const buildLabels = ({ granularity, year, month }) => {
   return Array.from({ length: 5 }, (_, i) => String(year - 4 + i));
 };
 
+// ✅ group key by ANY date field (createdAt / paidAt)
+const groupKeyBy = (granularity, fieldPath) => {
+  const f = fieldPath; // e.g. "$createdAt" or "$paidAt"
+  if (granularity === "day") return { y: { $year: f }, m: { $month: f }, d: { $dayOfMonth: f } };
+  if (granularity === "month") return { y: { $year: f }, m: { $month: f } };
+  return { y: { $year: f } };
+};
+
 const indexFromGroup = ({ granularity, year, _id }) => {
   if (granularity === "day") return Number(_id?.d || 1) - 1;
   if (granularity === "month") return Number(_id?.m || 1) - 1;
-  return (Number(_id?.y || year) - (year - 4));
+  return Number(_id?.y || year) - (year - 4);
 };
 
 export const getDashboardSummary = async (req, res) => {
   try {
     const granularityRaw = String(req.query?.granularity || "month").toLowerCase();
-    const granularity = ["day","month","year"].includes(granularityRaw) ? granularityRaw : "month";
+    const granularity = ["day", "month", "year"].includes(granularityRaw) ? granularityRaw : "month";
 
     const year = toInt(req.query?.year, new Date().getFullYear());
     const month = toInt(req.query?.month, new Date().getMonth() + 1);
@@ -63,21 +65,15 @@ export const getDashboardSummary = async (req, res) => {
     const { start, end } = getRange({ year, month, granularity });
     const labels = buildLabels({ granularity, year, month });
 
-    const matchCreated = { createdAt: { $gte: start, $lt: end } };
-
-    // ✅ INVESTMENTS
-    // interestAmount = investmentAmount * (interestRate/100)
-    // brokerCommissionTotal = interestAmount * (brokerCommissionRate/100)  ✅ FIXED
-    // profit = interestAmount - brokerCommissionTotal
+    // ✅ INVESTMENTS (by createdAt)
     const invAgg = await Investment.aggregate([
-      { $match: matchCreated },
+      { $match: { createdAt: { $gte: start, $lt: end } } },
       {
         $project: {
           createdAt: 1,
           investmentAmount: { $ifNull: ["$investmentAmount", 0] },
           investmentInterestRate: { $ifNull: ["$investmentInterestRate", 0] },
           brokerCommissionRate: { $ifNull: ["$brokerCommissionRate", 0] },
-
           interestAmount: {
             $multiply: [
               { $ifNull: ["$investmentAmount", 0] },
@@ -96,40 +92,54 @@ export const getDashboardSummary = async (req, res) => {
           },
         },
       },
-      {
-        $addFields: {
-          profit: { $subtract: ["$interestAmount", "$brokerCommissionTotal"] },
-        },
-      },
+      { $addFields: { theoreticalProfit: { $subtract: ["$interestAmount", "$brokerCommissionTotal"] } } },
       {
         $group: {
-          _id: groupKey(granularity),
+          _id: groupKeyBy(granularity, "$createdAt"),
           totalInvestment: { $sum: "$investmentAmount" },
           totalInterest: { $sum: "$interestAmount" },
           totalBrokerCommission: { $sum: "$brokerCommissionTotal" },
-          totalProfit: { $sum: "$profit" },
+          totalTheoreticalProfit: { $sum: "$theoreticalProfit" },
         },
       },
     ]);
 
-    // ✅ CUSTOMER PAYMENTS RECEIVED (money in)
+    // ✅ CUSTOMER PAYMENTS RECEIVED (by paidAt)
     const customerPayAgg = await CustomerPayment.aggregate([
-      { $match: { paidAt: { $gte: start, $lt: end } } }, // ✅ use paidAt for payment time
-      { $group: { _id: groupKey(granularity), totalCustomerPay: { $sum: { $ifNull: ["$paidAmount", 0] } } } },
+      { $match: { paidAt: { $gte: start, $lt: end } } },
+      {
+        $group: {
+          _id: groupKeyBy(granularity, "$paidAt"),
+          totalCustomerPay: { $sum: { $ifNull: ["$paidAmount", 0] } },
+        },
+      },
     ]);
 
-    // ✅ BROKER PAYMENTS PAID (money out)
+    // ✅ BROKER PAYMENTS PAID (by paidAt)
     const brokerPayAgg = await BrokerPayment.aggregate([
-      { $match: { paidAt: { $gte: start, $lt: end } } }, // ✅ use paidAt for payment time
-      { $group: { _id: groupKey(granularity), totalBrokerPay: { $sum: { $ifNull: ["$paidAmount", 0] } } } },
+      { $match: { paidAt: { $gte: start, $lt: end } } },
+      {
+        $group: {
+          _id: groupKeyBy(granularity, "$paidAt"),
+          totalBrokerPay: { $sum: { $ifNull: ["$paidAmount", 0] } },
+        },
+      },
     ]);
 
+    // ✅ series (what frontend charts read)
     const series = {
       investment: Array(labels.length).fill(0),
+
+      // calculated (optional, still kept)
       brokerCommission: Array(labels.length).fill(0),
-      profit: Array(labels.length).fill(0),
-      customerPay: Array(labels.length).fill(0),
-      brokerPay: Array(labels.length).fill(0),
+      theoreticalProfit: Array(labels.length).fill(0),
+
+      // money flow (IMPORTANT)
+      customerPay: Array(labels.length).fill(0), // money in
+      brokerPay: Array(labels.length).fill(0),   // money out
+
+      // ✅ REAL PROFIT (money in - money out)
+      realProfit: Array(labels.length).fill(0),
     };
 
     for (const row of invAgg) {
@@ -137,7 +147,7 @@ export const getDashboardSummary = async (req, res) => {
       if (idx >= 0 && idx < labels.length) {
         series.investment[idx] = Number(row.totalInvestment || 0);
         series.brokerCommission[idx] = Number(row.totalBrokerCommission || 0);
-        series.profit[idx] = Number(row.totalProfit || 0);
+        series.theoreticalProfit[idx] = Number(row.totalTheoreticalProfit || 0);
       }
     }
 
@@ -151,15 +161,27 @@ export const getDashboardSummary = async (req, res) => {
       if (idx >= 0 && idx < labels.length) series.brokerPay[idx] = Number(row.totalBrokerPay || 0);
     }
 
+    // ✅ compute realProfit AFTER filling both payment series
+    for (let i = 0; i < labels.length; i++) {
+      series.realProfit[i] = Number(series.customerPay[i] || 0) - Number(series.brokerPay[i] || 0);
+    }
+
     const totals = {
       totalInvestment: series.investment.reduce((a, b) => a + b, 0),
+
+      // calculated (optional)
       totalBrokerCommission: series.brokerCommission.reduce((a, b) => a + b, 0),
-      totalProfit: series.profit.reduce((a, b) => a + b, 0),
+      totalTheoreticalProfit: series.theoreticalProfit.reduce((a, b) => a + b, 0),
+
+      // money flow
       totalCustomerPay: series.customerPay.reduce((a, b) => a + b, 0),
       totalBrokerPay: series.brokerPay.reduce((a, b) => a + b, 0),
+
+      // ✅ REAL PROFIT TOTAL
+      totalRealProfit: series.realProfit.reduce((a, b) => a + b, 0),
     };
 
-    // Monthly Review by selected month/year (payments should use paidAt)
+    // ✅ Monthly Review (always for selected month/year)
     const monthStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
     const monthEnd = new Date(Date.UTC(year, month, 1, 0, 0, 0));
 
@@ -178,10 +200,14 @@ export const getDashboardSummary = async (req, res) => {
       { $group: { _id: null, totalBrokerPayThisMonth: { $sum: { $ifNull: ["$paidAmount", 0] } } } },
     ]);
 
+    const customerPayThisMonth = Number(monthlyCustomerPay?.totalCustomerPayThisMonth || 0);
+    const brokerPayThisMonth = Number(monthlyBrokerPay?.totalBrokerPayThisMonth || 0);
+
     const review = {
       monthLabel: monthNamesShort[month - 1],
-      customerPayThisMonth: Number(monthlyCustomerPay?.totalCustomerPayThisMonth || 0),
-      brokerPayThisMonth: Number(monthlyBrokerPay?.totalBrokerPayThisMonth || 0),
+      customerPayThisMonth,
+      brokerPayThisMonth,
+      realProfitThisMonth: customerPayThisMonth - brokerPayThisMonth,
       investmentThisMonth: Number(monthlyInv?.totalInvestmentThisMonth || 0),
     };
 
@@ -193,9 +219,10 @@ export const getDashboardSummary = async (req, res) => {
       totals,
       monthlyReview: review,
       note: {
-        brokerCommissionFormula: "brokerCommissionTotal = (investmentAmount*(investmentInterestRate/100))*(brokerCommissionRate/100)",
-        profitFormula: "profit = interestAmount - brokerCommissionTotal",
         flow: "Customers pay you (CustomerPayment.paidAt). You pay brokers (BrokerPayment.paidAt).",
+        realProfitFormula: "realProfit = customerPay - brokerPay",
+        theoreticalProfitFormula:
+          "theoreticalProfit = (investmentAmount*(investmentInterestRate/100)) - ((investmentAmount*(investmentInterestRate/100))*(brokerCommissionRate/100))",
       },
     });
   } catch (err) {
