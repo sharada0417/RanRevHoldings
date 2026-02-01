@@ -4,7 +4,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export const customerPayApi = createApi({
   reducerPath: "customerPayApi",
-  tagTypes: ["CustomerPay", "Investment"],
+  tagTypes: ["CustomerPay", "CustomerPayHistory", "CustomerFlow"],
   baseQuery: fetchBaseQuery({
     baseUrl: `${BACKEND_URL}/api/customer/payments/`,
     credentials: "include",
@@ -15,60 +15,50 @@ export const customerPayApi = createApi({
     },
   }),
   endpoints: (builder) => ({
-    // ✅ GET full report by customer NIC + assetId
-    // GET /api/customer/payments/customer/:nic/asset/:assetId/full
-    getCustomerAssetFullReport: builder.query({
-      query: ({ nic, assetId }) => `customer/${encodeURIComponent(nic)}/asset/${assetId}/full`,
-      providesTags: (res) =>
-        res?.data?.length
-          ? [
-              ...res.data.map((x) => ({ type: "Investment", id: x.investmentId })),
-              { type: "CustomerPay", id: "REPORT" },
-            ]
-          : [{ type: "CustomerPay", id: "REPORT" }],
+    // ✅ EXISTING: investments list for payment page
+    // GET /api/customer/payments/customer/:nic/investments?brokerId=...
+    getCustomerInvestments: builder.query({
+      query: ({ nic, brokerId }) =>
+        `customer/${encodeURIComponent(nic)}/investments?brokerId=${encodeURIComponent(
+          brokerId
+        )}`,
+      providesTags: [{ type: "CustomerPay", id: "INV_LIST" }],
     }),
 
-    // ✅ POST pay
+    // ✅ EXISTING: create payment
     // POST /api/customer/payments/pay
     createCustomerPayment: builder.mutation({
-      query: (payload) => ({
-        url: "pay",
-        method: "POST",
-        body: payload, // { customerNic, investmentId, payAmount, paymentType, note }
-      }),
-      invalidatesTags: (res) =>
-        res?.data?.investmentSummary?.investmentId
-          ? [
-              { type: "Investment", id: res.data.investmentSummary.investmentId },
-              { type: "CustomerPay", id: "REPORT" },
-            ]
-          : [{ type: "CustomerPay", id: "REPORT" }],
+      query: (payload) => ({ url: "pay", method: "POST", body: payload }),
+      invalidatesTags: [
+        { type: "CustomerPay", id: "INV_LIST" },
+        { type: "CustomerFlow", id: "LIST" },
+      ],
     }),
 
-    /* ✅ ADDED BELOW (FLOW) */
-
-    // ✅ GET customer flow list (ALL)
+    // ✅ NEW: Customer Flow list
     // GET /api/customer/payments/customer/flow
     getCustomerFlow: builder.query({
       query: () => `customer/flow`,
-      providesTags: [{ type: "CustomerPay", id: "FLOW" }],
+      providesTags: [{ type: "CustomerFlow", id: "LIST" }],
     }),
 
-    // ✅ GET customer flow detail by NIC (CARD)
+    // ✅ NEW: Customer Flow detail by NIC (for modal)
     // GET /api/customer/payments/customer/:nic/flow
     getCustomerFlowByNic: builder.query({
       query: (nic) => `customer/${encodeURIComponent(nic)}/flow`,
-      providesTags: [{ type: "CustomerPay", id: "FLOW_DETAIL" }],
+      providesTags: (res, err, nic) => [
+        { type: "CustomerFlow", id: String(nic || "").trim().toUpperCase() || "NIC" },
+      ],
     }),
   }),
 });
 
 export const {
-  useGetCustomerAssetFullReportQuery,
-  useLazyGetCustomerAssetFullReportQuery,
+  useGetCustomerInvestmentsQuery,
+  useLazyGetCustomerInvestmentsQuery,
   useCreateCustomerPaymentMutation,
 
-  // ✅ added (flow)
+  // ✅ NEW exports
   useGetCustomerFlowQuery,
   useLazyGetCustomerFlowByNicQuery,
 } = customerPayApi;

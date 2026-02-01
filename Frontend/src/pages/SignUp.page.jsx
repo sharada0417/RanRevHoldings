@@ -134,7 +134,17 @@ const SignUpPage = () => {
           >
             {isLoading ? "Signing Up..." : "SignUp"}
           </button>
+          
         </form>
+         <p className="text-sm text-gray-600 mt-4 text-center">
+            Alreay have an account?
+            <span
+              className="text-blue-700 font-semibold cursor-pointer hover:underline"
+              onClick={() => navigate("/signin")}
+            >
+              Sign In
+            </span>
+          </p>
       </div>
     </div>
   );

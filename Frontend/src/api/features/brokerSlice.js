@@ -2,7 +2,7 @@ import { createSlice } from "@reduxjs/toolkit";
 
 const initialState = {
   modal: null, // "add" | "view" | "edit" | "delete" | null
-  selected: null, // broker object
+  selected: null,
 };
 
 const brokerSlice = createSlice({

@@ -1,6 +1,7 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export const customerApi = createApi({
   reducerPath: "customerApi",
@@ -8,11 +9,14 @@ export const customerApi = createApi({
   baseQuery: fetchBaseQuery({
     baseUrl: `${BACKEND_URL}/api/customer/`,
     prepareHeaders: (headers, { getState }) => {
+      // If you have auth token in redux, keep this.
+      // If you don't use token, you can delete this block safely.
       const token = getState()?.user?.token;
       if (token) headers.set("Authorization", `Bearer ${token}`);
       return headers;
     },
   }),
+
   endpoints: (builder) => ({
     // GET /api/customer
     getCustomers: builder.query({
@@ -26,7 +30,7 @@ export const customerApi = createApi({
           : [{ type: "Customer", id: "LIST" }],
     }),
 
-    // GET /api/customer/search?nic= or ?name=
+    // GET /api/customer/search?nic=... or ?name=...
     searchCustomers: builder.query({
       query: ({ nic, name }) => {
         const params = new URLSearchParams();
@@ -41,12 +45,6 @@ export const customerApi = createApi({
               { type: "Customer", id: "LIST" },
             ]
           : [{ type: "Customer", id: "LIST" }],
-    }),
-
-    // GET /api/customer/:id
-    getCustomerById: builder.query({
-      query: (id) => `${id}`,
-      providesTags: (result, error, id) => [{ type: "Customer", id }],
     }),
 
     // POST /api/customer
@@ -86,7 +84,6 @@ export const customerApi = createApi({
 export const {
   useGetCustomersQuery,
   useLazySearchCustomersQuery,
-  useGetCustomerByIdQuery,
   useCreateCustomerMutation,
   useUpdateCustomerMutation,
   useDeleteCustomerMutation,

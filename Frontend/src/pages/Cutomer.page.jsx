@@ -7,7 +7,11 @@ import {
   useUpdateCustomerMutation,
   useDeleteCustomerMutation,
 } from "../api/customerApi";
-import { openModal, closeModal } from "../api/features/customerSlice";
+import { openModal, closeModal } from "../api/features/customerSlice.js"
+
+/* -------------------- Small Helpers -------------------- */
+
+const toast = (msg) => alert(msg);
 
 const ModalShell = ({ title, children, onClose }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3">
@@ -45,18 +49,27 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        onSubmit({ nic, name, address, city, tpNumber });
+
+        // ✅ NIC optional: only send if typed
+        const payload = {
+          ...(nic.trim() ? { nic } : {}),
+          name,
+          address,
+          city,
+          tpNumber,
+        };
+
+        onSubmit(payload);
       }}
       className="space-y-3"
     >
       <div>
-        <label className="text-sm text-gray-700">NIC</label>
+        <label className="text-sm text-gray-700">NIC (Optional)</label>
         <input
           value={nic}
           onChange={(e) => setNic(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
-          placeholder="200110801867 or 94674433786V"
-          required
+          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="Optional: 200110801867 or 94674433786V"
         />
       </div>
 
@@ -65,7 +78,7 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
           placeholder="Customer name"
           required
         />
@@ -76,7 +89,7 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
         <input
           value={address}
           onChange={(e) => setAddress(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
           placeholder="No 12, Main Road"
           required
         />
@@ -87,7 +100,7 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
         <input
           value={city}
           onChange={(e) => setCity(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
           placeholder="Colombo"
           required
         />
@@ -98,7 +111,7 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
         <input
           value={tpNumber}
           onChange={(e) => setTpNumber(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+          className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
           placeholder="0765556575 or 94765556575"
           required
         />
@@ -115,17 +128,19 @@ const CustomerForm = ({ initial, onSubmit, isLoading }) => {
   );
 };
 
-const CustomerPage = () => {
+/* -------------------- Page -------------------- */
+
+export default function CustomerPage() {
   const dispatch = useDispatch();
   const { modal, selected } = useSelector((s) => s.customer);
 
   const [searchText, setSearchText] = useState("");
 
-  // default list
+  // Default list
   const { data: listRes, isLoading: loadingList, error: listError } =
     useGetCustomersQuery();
 
-  // search
+  // Search
   const [triggerSearch, { data: searchRes, isFetching: loadingSearch }] =
     useLazySearchCustomersQuery();
 
@@ -134,51 +149,47 @@ const CustomerPage = () => {
   const [deleteCustomer, { isLoading: deleting }] = useDeleteCustomerMutation();
 
   const customers = useMemo(() => {
-    // if search text active and we searched -> show search
     if (searchText.trim() && searchRes?.data) return searchRes.data;
     return listRes?.data || [];
   }, [listRes, searchRes, searchText]);
+
+  const close = () => dispatch(closeModal());
 
   const handleSearch = async (e) => {
     e.preventDefault();
     const q = searchText.trim();
     if (!q) return;
 
-    // simple rule: if has number -> NIC search else name search
+    // ✅ if contains number -> treat as NIC search, else name
     const isNicLike = /[0-9]/.test(q);
-    await triggerSearch({ nic: isNicLike ? q : "", name: !isNicLike ? q : "" });
+    try {
+      await triggerSearch({ nic: isNicLike ? q : "", name: !isNicLike ? q : "" });
+    } catch {
+      toast("Search failed");
+    }
   };
 
-  const handleAdd = () => dispatch(openModal({ modal: "add" }));
-  const handleView = (customer) =>
-    dispatch(openModal({ modal: "view", customer }));
-  const handleEdit = (customer) =>
-    dispatch(openModal({ modal: "edit", customer }));
-  const handleDeleteAsk = (customer) =>
-    dispatch(openModal({ modal: "delete", customer }));
-
-  const close = () => dispatch(closeModal());
+  const handleClear = () => {
+    setSearchText("");
+  };
 
   const onCreate = async (payload) => {
     try {
       const res = await createCustomer(payload).unwrap();
       if (res?.success) close();
-      else alert(res?.message || "Create failed");
+      else toast(res?.message || "Create failed");
     } catch (err) {
-      alert(err?.data?.message || "Create failed");
+      toast(err?.data?.message || "Create failed");
     }
   };
 
   const onUpdate = async (payload) => {
     try {
-      const res = await updateCustomer({
-        id: selected?._id,
-        payload,
-      }).unwrap();
+      const res = await updateCustomer({ id: selected?._id, payload }).unwrap();
       if (res?.success) close();
-      else alert(res?.message || "Update failed");
+      else toast(res?.message || "Update failed");
     } catch (err) {
-      alert(err?.data?.message || "Update failed");
+      toast(err?.data?.message || "Update failed");
     }
   };
 
@@ -186,13 +197,11 @@ const CustomerPage = () => {
     try {
       const res = await deleteCustomer(selected?._id).unwrap();
       if (res?.success) close();
-      else alert(res?.message || "Delete failed");
+      else toast(res?.message || "Delete failed");
     } catch (err) {
-      alert(err?.data?.message || "Delete failed");
+      toast(err?.data?.message || "Delete failed");
     }
   };
-
-  const total = customers.length;
 
   return (
     <div className="w-full flex justify-center">
@@ -221,7 +230,7 @@ const CustomerPage = () => {
           </button>
           <button
             type="button"
-            onClick={() => setSearchText("")}
+            onClick={handleClear}
             className="w-full sm:w-auto rounded-lg bg-gray-200 px-4 py-2 text-xs sm:text-sm font-bold text-gray-800 hover:bg-gray-300 transition"
           >
             Clear
@@ -231,12 +240,12 @@ const CustomerPage = () => {
         {/* HEADER + ADD */}
         <div className="mt-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <p className="text-xs sm:text-sm text-gray-600 text-center sm:text-left">
-            Total: <span className="font-bold">{total}</span>
+            Total: <span className="font-bold">{customers.length}</span>
           </p>
 
           <div className="flex justify-center sm:justify-end">
             <button
-              onClick={handleAdd}
+              onClick={() => dispatch(openModal({ modal: "add" }))}
               className="w-full sm:w-auto rounded-lg bg-green-600 px-4 py-2 text-xs sm:text-sm font-bold text-white hover:bg-green-700 transition"
             >
               + Add Customer
@@ -289,8 +298,9 @@ const CustomerPage = () => {
                       before:content-[attr(data-label)] before:block sm:before:hidden
                       before:text-[10px] before:text-gray-500 before:mb-1 font-semibold"
                     >
-                      {c.nic}
+                      {c.nic || "-"}
                     </td>
+
                     <td
                       data-label="Name"
                       className="block sm:table-cell p-3 text-left sm:text-center
@@ -299,6 +309,7 @@ const CustomerPage = () => {
                     >
                       {c.name}
                     </td>
+
                     <td
                       data-label="Address"
                       className="block sm:table-cell p-3 text-left sm:text-center
@@ -307,6 +318,7 @@ const CustomerPage = () => {
                     >
                       {c.address}
                     </td>
+
                     <td
                       data-label="City"
                       className="block sm:table-cell p-3 text-left sm:text-center
@@ -315,6 +327,7 @@ const CustomerPage = () => {
                     >
                       {c.city}
                     </td>
+
                     <td
                       data-label="TP Number"
                       className="block sm:table-cell p-3 text-left sm:text-center
@@ -332,19 +345,25 @@ const CustomerPage = () => {
                     >
                       <div className="flex justify-start sm:justify-center gap-1 sm:gap-2">
                         <button
-                          onClick={() => handleView(c)}
+                          onClick={() =>
+                            dispatch(openModal({ modal: "view", customer: c }))
+                          }
                           className="rounded-md bg-blue-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
                         >
                           View
                         </button>
                         <button
-                          onClick={() => handleEdit(c)}
+                          onClick={() =>
+                            dispatch(openModal({ modal: "edit", customer: c }))
+                          }
                           className="rounded-md bg-yellow-500 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
                         >
                           Update
                         </button>
                         <button
-                          onClick={() => handleDeleteAsk(c)}
+                          onClick={() =>
+                            dispatch(openModal({ modal: "delete", customer: c }))
+                          }
                           className="rounded-md bg-red-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
                         >
                           Delete
@@ -363,20 +382,20 @@ const CustomerPage = () => {
         </p>
       </div>
 
-      {/* ✅ ADD MODAL */}
+      {/* ADD MODAL */}
       {modal === "add" && (
         <ModalShell title="Add Customer" onClose={close}>
           <CustomerForm initial={null} onSubmit={onCreate} isLoading={creating} />
         </ModalShell>
       )}
 
-      {/* ✅ VIEW MODAL */}
+      {/* VIEW MODAL */}
       {modal === "view" && selected && (
         <ModalShell title="Customer Details" onClose={close}>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-gray-500">NIC</span>
-              <span className="font-bold">{selected.nic}</span>
+              <span className="font-bold">{selected.nic || "-"}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Name</span>
@@ -396,7 +415,9 @@ const CustomerPage = () => {
             </div>
 
             <button
-              onClick={() => dispatch(openModal({ modal: "edit", customer: selected }))}
+              onClick={() =>
+                dispatch(openModal({ modal: "edit", customer: selected }))
+              }
               className="mt-4 w-full rounded-xl bg-yellow-500 px-4 py-2 text-white font-extrabold hover:bg-yellow-600"
             >
               Update
@@ -405,18 +426,17 @@ const CustomerPage = () => {
         </ModalShell>
       )}
 
-      {/* ✅ EDIT MODAL */}
+      {/* EDIT MODAL */}
       {modal === "edit" && selected && (
         <ModalShell title="Update Customer" onClose={close}>
-          <CustomerForm
-            initial={selected}
-            onSubmit={onUpdate}
-            isLoading={updating}
-          />
+          <CustomerForm initial={selected} onSubmit={onUpdate} isLoading={updating} />
+          <p className="mt-2 text-[11px] text-gray-500">
+            Tip: To remove NIC, clear the NIC field and save.
+          </p>
         </ModalShell>
       )}
 
-      {/* ✅ DELETE CONFIRM MODAL */}
+      {/* DELETE MODAL */}
       {modal === "delete" && selected && (
         <ModalShell title="Delete Customer" onClose={close}>
           <p className="text-sm text-gray-700">
@@ -443,6 +463,4 @@ const CustomerPage = () => {
       )}
     </div>
   );
-};
-
-export default CustomerPage;
+}

@@ -16,207 +16,140 @@ export default function BrokerPaymantHistory() {
     searchText.trim()
   );
 
-  const rows = data?.data || [];
+  const rows = useMemo(() => (Array.isArray(data?.data) ? data.data : []), [data]);
 
-  // ✅ (optional) local filter too
+  // optional local filter
   const filtered = useMemo(() => {
     const s = searchText.trim().toLowerCase();
     if (!s) return rows;
-    return rows.filter((r) =>
-      `${r.brokerName} ${r.brokerNic} ${r.customerName} ${r.customerNic}`
-        .toLowerCase()
-        .includes(s)
-    );
+
+    return rows.filter((r) => {
+      const customerText = (r.customers || [])
+        .map((c) => `${c.name} ${c.nic}`)
+        .join(" ");
+      const str = `${r.brokerName} ${r.brokerNic} ${customerText}`.toLowerCase();
+      return str.includes(s);
+    });
   }, [rows, searchText]);
 
   return (
-    <div className="w-full flex justify-center">
-      <div className="w-full max-w-7xl px-3 sm:px-6 py-4 sm:py-6 min-w-0">
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-blue-800 text-center">
+    <div className="w-full flex justify-center p-4 sm:p-6">
+      <div className="w-full max-w-6xl">
+        <h1 className="text-center text-blue-800 text-2xl sm:text-3xl font-extrabold mb-4">
           Broker Payment History
         </h1>
 
         {/* SEARCH */}
-        <div className="mt-5 sm:mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2">
+        <div className="flex flex-col sm:flex-row gap-2 justify-center mb-4">
           <input
-            type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             placeholder="Search by Broker NIC/Name or Customer NIC/Name"
-            className="w-full sm:w-[520px] rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-400"
+            className="w-full sm:w-[680px] px-4 py-2 bg-gray-100 rounded-xl outline-none"
           />
           <button
             type="button"
             onClick={() => setSearchText("")}
-            className="w-full sm:w-auto rounded-lg bg-blue-700 px-4 py-2 text-xs sm:text-sm font-bold text-white hover:bg-blue-800 transition"
+            className="px-4 py-2 bg-white rounded-xl hover:bg-gray-100"
           >
             Clear
           </button>
         </div>
 
-        {/* HEADER */}
-        <div className="mt-4 flex items-center justify-between">
-          <p className="text-xs sm:text-sm text-gray-600">
-            Total: <span className="font-bold">{filtered.length}</span>
-          </p>
-          <p className="text-[11px] text-gray-500">
-            {isFetching ? "Updating..." : ""}
-          </p>
-        </div>
+        {/* CARD LIST */}
+        <div
+          className="relative max-h-[75vh] overflow-y-auto space-y-3 pr-1"
+          style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        >
+          <style>{`
+            .hide-scrollbar::-webkit-scrollbar { display: none; }
+          `}</style>
 
-        {/* TABLE */}
-        <div className="mt-3 w-full overflow-x-auto bg-white rounded-xl shadow-sm">
-          <table className="w-full min-w-[1200px]">
-            <thead className="hidden sm:table-header-group">
-              <tr className="bg-gray-100 text-gray-800 text-sm">
-                <th className="p-3 text-left">Broker</th>
-                <th className="p-3 text-left">Customer</th>
-                <th className="p-3 text-center">Customer Pay Month</th>
-                <th className="p-3 text-center">Customer Pay Amount</th>
-                <th className="p-3 text-center">Broker Paid Month</th>
-                <th className="p-3 text-center">Broker Paid Amount</th>
-                <th className="p-3 text-center">Total Broker Payable</th>
-                <th className="p-3 text-center">Total Broker Paid</th>
-                <th className="p-3 text-center">Pending</th>
-              </tr>
-            </thead>
+          <div className="hide-scrollbar" />
 
-            <tbody className="block sm:table-row-group">
-              {isLoading ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-gray-500" colSpan={9}>
-                    Loading...
-                  </td>
-                </tr>
-              ) : error ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-red-600" colSpan={9}>
-                    Failed to load broker payment history
-                  </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-gray-500" colSpan={9}>
-                    No records found
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((r) => {
-                  const pending = Number(r.brokerPendingPayment || 0);
+          {isLoading ? (
+            <div className="text-center text-gray-500 py-10">Loading...</div>
+          ) : error ? (
+            <div className="text-center text-red-600 py-10">
+              Failed to load broker payment history
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center text-gray-500 py-10">No records found</div>
+          ) : (
+            filtered.map((r) => (
+              <div
+                key={r.brokerPaymentId}
+                className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4"
+              >
+                {/* TOP */}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <div>
+                    <div className="font-bold text-gray-900">
+                      {safe(r.brokerName)} ({safe(r.brokerNic)})
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Month Range: <span className="font-semibold">{safe(r.monthRange)}</span>
+                    </div>
+                  </div>
 
-                  return (
-                    <tr
-                      key={r.brokerPaymentId}
-                      className="
-                        block sm:table-row
-                        mb-3 sm:mb-0
-                        mx-2 sm:mx-0
-                        bg-white
-                        rounded-lg
-                        sm:border-b border-gray-200
-                      "
+                  <div className="text-sm font-semibold text-blue-700">
+                    {money(r.brokerPaidAmount)}
+                  </div>
+                </div>
+
+                {/* DETAILS */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3 text-sm">
+                  <div>
+                    <div className="text-gray-500 text-xs">Payment Month</div>
+                    <div className="font-semibold">{safe(r.brokerPaidMonth)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-gray-500 text-xs">Payment Date & Time</div>
+                    <div className="font-semibold">{safe(r.brokerPaidDateTime)}</div>
+                  </div>
+
+                  <div>
+                    <div className="text-gray-500 text-xs">Pending Broker Commission</div>
+                    <div
+                      className={`font-bold ${
+                        Number(r.brokerPendingPayment || 0) > 0
+                          ? "text-red-600"
+                          : "text-green-700"
+                      }`}
                     >
-                      {/* Broker */}
-                      <td
-                        data-label="Broker"
-                        className="block sm:table-cell p-3 text-left sm:text-left
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        <div className="text-sm font-semibold text-gray-900">
-                          {safe(r.brokerName)}
+                      {money(r.brokerPendingPayment)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* OPTIONAL customers list */}
+                {Array.isArray(r.customers) && r.customers.length > 0 ? (
+                  <div className="mt-3 text-sm text-gray-700 bg-gray-50 rounded-xl p-2">
+                    <div className="text-xs text-gray-500 mb-1">Customers in this payment:</div>
+                    <div className="space-y-1">
+                      {r.customers.map((c, idx) => (
+                        <div key={idx} className="text-xs">
+                          • {safe(c.name)} ({safe(c.nic)})
                         </div>
-                        <div className="text-xs text-gray-500">{safe(r.brokerNic)}</div>
-                      </td>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
-                      {/* Customer */}
-                      <td
-                        data-label="Customer"
-                        className="block sm:table-cell p-3 text-left sm:text-left
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        <div className="text-sm font-semibold text-gray-900">
-                          {safe(r.customerName)}
-                        </div>
-                        <div className="text-xs text-gray-500">{safe(r.customerNic)}</div>
-                      </td>
-
-                      <td
-                        data-label="Customer Pay Month"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {safe(r.customerPayMonth)}
-                      </td>
-
-                      <td
-                        data-label="Customer Pay Amount"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {money(r.customerPayAmount)}
-                      </td>
-
-                      <td
-                        data-label="Broker Paid Month"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {safe(r.brokerPaidMonth)}
-                      </td>
-
-                      <td
-                        data-label="Broker Paid Amount"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {money(r.brokerPaidAmount)}
-                      </td>
-
-                      <td
-                        data-label="Total Broker Payable"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {money(r.totalBrokerPayable)}
-                      </td>
-
-                      <td
-                        data-label="Total Broker Paid"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        {money(r.totalBrokerPaid)}
-                      </td>
-
-                      <td
-                        data-label="Pending"
-                        className="block sm:table-cell p-3 text-left sm:text-center font-bold
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
-                        <span className={pending > 0 ? "text-red-600" : "text-green-600"}>
-                          {money(r.brokerPendingPayment)}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                {r.note ? (
+                  <div className="mt-3 text-sm text-gray-700 bg-gray-50 rounded-xl p-2">
+                    <span className="text-xs text-gray-500">Note:</span> {safe(r.note)}
+                  </div>
+                ) : null}
+              </div>
+            ))
+          )}
         </div>
 
-        <p className="mt-2 text-center text-[10px] text-gray-500 sm:hidden">
-          Scroll left/right if needed.
-        </p>
+        <div className="mt-2 text-[11px] text-gray-500 text-center">
+          {isFetching ? "Updating..." : `Total Records: ${filtered.length}`}
+        </div>
       </div>
     </div>
   );

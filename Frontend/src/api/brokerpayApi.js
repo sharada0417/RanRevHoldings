@@ -4,7 +4,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export const brokerPayApi = createApi({
   reducerPath: "brokerPayApi",
-  tagTypes: ["BrokerPay"],
+  tagTypes: ["BrokerPaySummary", "BrokerPay"],
   baseQuery: fetchBaseQuery({
     baseUrl: `${BACKEND_URL}/api/broker/payments/`,
     credentials: "include",
@@ -14,35 +14,32 @@ export const brokerPayApi = createApi({
       return headers;
     },
   }),
-
   endpoints: (builder) => ({
-    // ✅ summary
+    // ✅ summary for View Brokers page
     getBrokerSummaryByNic: builder.query({
       query: (nic) => `broker/${encodeURIComponent(nic)}/summary`,
-      providesTags: [{ type: "BrokerPay", id: "SUMMARY" }],
+      providesTags: (res, err, nic) => [{ type: "BrokerPaySummary", id: nic }],
     }),
 
-    // ✅ pay
+    // ✅ CREATE broker payment (this hook was missing)
     createBrokerPayment: builder.mutation({
       query: (payload) => ({
         url: "pay",
         method: "POST",
-        body: payload, // { brokerNic, investmentId, payAmount, note }
+        body: payload,
       }),
-      invalidatesTags: [{ type: "BrokerPay", id: "SUMMARY" }],
-    }),
-
-    // ✅ history
-    getBrokerHistoryByNic: builder.query({
-      query: (nic) => `broker/${encodeURIComponent(nic)}/history`,
-      providesTags: [{ type: "BrokerPay", id: "HISTORY" }],
+      invalidatesTags: (res, err, arg) => [
+        { type: "BrokerPay", id: "LIST" },
+        // refresh broker summary too (if brokerNic available)
+        ...(arg?.brokerNic
+          ? [{ type: "BrokerPaySummary", id: String(arg.brokerNic).trim().toUpperCase() }]
+          : []),
+      ],
     }),
   }),
 });
 
 export const {
   useLazyGetBrokerSummaryByNicQuery,
-  useGetBrokerSummaryByNicQuery,
-  useCreateBrokerPaymentMutation,
-  useGetBrokerHistoryByNicQuery,
+  useCreateBrokerPaymentMutation, // ✅ now available
 } = brokerPayApi;

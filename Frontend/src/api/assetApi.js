@@ -27,7 +27,6 @@ export const assetApi = createApi({
           : [{ type: "Asset", id: "LIST" }],
     }),
 
-    // ✅ NEW: FLOW
     getAssetFlow: builder.query({
       query: (arrearsDays = 30) => `flow?arrearsDays=${arrearsDays}`,
       providesTags: [{ type: "Asset", id: "FLOW" }],
@@ -72,7 +71,7 @@ export const assetApi = createApi({
 
 export const {
   useGetAssetsQuery,
-  useGetAssetFlowQuery, // ✅ NEW
+  useGetAssetFlowQuery,
   useGetAssetByIdQuery,
   useCreateAssetMutation,
   useUpdateAssetMutation,

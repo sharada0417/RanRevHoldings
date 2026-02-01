@@ -1,4 +1,3 @@
-// src/pages/Broker.page.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -34,7 +33,9 @@ const Toast = ({ toast, onClose }) => {
             ✕
           </button>
         </div>
-        {toast.message ? <div className="text-xs mt-1 text-white/90">{toast.message}</div> : null}
+        {toast.message ? (
+          <div className="text-xs mt-1 text-white/90">{toast.message}</div>
+        ) : null}
       </div>
     </div>
   );
@@ -64,7 +65,11 @@ const ModalShell = ({ title, children, onClose }) => {
 /* ------------------------------ Validators ------------------------------ */
 const isValidNIC = (nic) => {
   const v = String(nic || "").trim();
-  return /^\d{12}$/.test(v) || /^\d{11}[VvXx]$/.test(v) || /^\d{9}[VvXx]$/.test(v);
+  return (
+    /^\d{12}$/.test(v) ||
+    /^\d{11}[VvXx]$/.test(v) ||
+    /^\d{9}[VvXx]$/.test(v)
+  );
 };
 
 const normalizePhone = (tpRaw) => {
@@ -76,14 +81,13 @@ const normalizePhone = (tpRaw) => {
 
 const isNonEmpty = (v) => String(v || "").trim().length > 0;
 
-/* ------------------------------ Page Component ------------------------------ */
 const BrokerPage = () => {
   const dispatch = useDispatch();
   const { modal, selected } = useSelector((s) => s.broker || { modal: null, selected: null });
 
   const [searchText, setSearchText] = useState("");
 
-  // Toast state
+  // Toast
   const [toast, setToast] = useState({ open: false, type: "success", title: "", message: "" });
   const showToast = (type, title, message) => {
     setToast({ open: true, type, title, message });
@@ -91,9 +95,8 @@ const BrokerPage = () => {
     window.__toastTimer = window.setTimeout(() => setToast((t) => ({ ...t, open: false })), 2600);
   };
 
-  // List + Search queries
+  // List + Search
   const { data: listData, isLoading: listLoading, isError: listError } = useGetBrokersQuery();
-
   const [triggerSearch, searchResult] = useLazySearchBrokersQuery();
   const { data: searchData, isFetching: searchLoading } = searchResult;
 
@@ -102,7 +105,6 @@ const BrokerPage = () => {
   const [updateBroker, { isLoading: updating }] = useUpdateBrokerMutation();
   const [deleteBroker, { isLoading: deleting }] = useDeleteBrokerMutation();
 
-  // Decide which data to show (search results or list)
   const brokers = useMemo(() => {
     const hasSearch = String(searchText || "").trim().length > 0 && searchData?.data;
     if (hasSearch) return searchData.data;
@@ -110,46 +112,37 @@ const BrokerPage = () => {
   }, [listData, searchData, searchText]);
 
   const total = brokers.length;
+  const loading = listLoading || searchLoading;
 
   const handleSearch = async (e) => {
     e.preventDefault();
     const q = String(searchText || "").trim();
     if (!q) {
-      showToast("info", "Search", "Type NIC or Name to search (or clear search to show all).");
+      showToast("info", "Search", "Type NIC or Name to search.");
       return;
     }
 
-    // If numbers => search as NIC, else name
-    const isMostlyNumeric = /^[0-9VvXx]+$/.test(q);
+    const isNicLike = /[0-9]/.test(q);
     try {
-      await triggerSearch(isMostlyNumeric ? { nic: q } : { name: q }).unwrap();
+      await triggerSearch({ nic: isNicLike ? q : "", name: !isNicLike ? q : "" }).unwrap();
     } catch (err) {
       showToast("error", "Search Failed", err?.data?.message || "Unable to search brokers.");
     }
   };
 
-  const clearSearch = () => {
-    setSearchText("");
-  };
+  const clearSearch = () => setSearchText("");
 
-  /* ------------------------------ Modal Actions ------------------------------ */
+  // Modals
   const openAdd = () => dispatch(openBrokerModal({ modal: "add" }));
   const openView = (broker) => dispatch(openBrokerModal({ modal: "view", broker }));
   const openEdit = (broker) => dispatch(openBrokerModal({ modal: "edit", broker }));
   const openDelete = (broker) => dispatch(openBrokerModal({ modal: "delete", broker }));
   const close = () => dispatch(closeBrokerModal());
 
-  /* ------------------------------- Form State ------------------------------- */
-  const [form, setForm] = useState({
-    nic: "",
-    name: "",
-    address: "",
-    city: "",
-    tpNumber: "",
-  });
+  // Form
+  const [form, setForm] = useState({ nic: "", name: "", address: "", city: "", tpNumber: "" });
   const [formError, setFormError] = useState("");
 
-  // Sync form when opening edit
   useEffect(() => {
     if (modal === "edit" && selected) {
       setForm({
@@ -167,6 +160,7 @@ const BrokerPage = () => {
     }
   }, [modal, selected]);
 
+  // ✅ NIC OPTIONAL validation
   const validateForm = () => {
     const nic = String(form.nic || "").trim();
     const name = String(form.name || "").trim();
@@ -174,38 +168,45 @@ const BrokerPage = () => {
     const city = String(form.city || "").trim();
     const tp = String(form.tpNumber || "").trim();
 
-    if (!isNonEmpty(nic) || !isNonEmpty(name) || !isNonEmpty(address) || !isNonEmpty(city) || !isNonEmpty(tp)) {
-      return "All fields are required.";
+    if (!isNonEmpty(name) || !isNonEmpty(address) || !isNonEmpty(city) || !isNonEmpty(tp)) {
+      return "name, address, city, tpNumber are required.";
     }
-    if (!isValidNIC(nic)) {
+
+    // ✅ validate NIC only if typed
+    if (nic && !isValidNIC(nic)) {
       return "Invalid NIC. Use 12 digits OR 11 digits + V/X OR 9 digits + V/X.";
     }
+
     const normalized = normalizePhone(tp);
     if (!normalized) {
       return "Invalid phone. Use 94xxxxxxxxx (9476xxxxxxx) or 0xxxxxxxxx (076xxxxxxx).";
     }
+
     return null;
+  };
+
+  const buildPayload = () => {
+    const nic = String(form.nic || "").trim();
+    const payload = {
+      name: String(form.name).trim(),
+      address: String(form.address).trim(),
+      city: String(form.city).trim(),
+      tpNumber: normalizePhone(form.tpNumber),
+    };
+
+    // ✅ send nic only if typed; else do not send (create)
+    if (nic) payload.nic = nic;
+
+    return payload;
   };
 
   const onSubmitAdd = async (e) => {
     e.preventDefault();
     const errMsg = validateForm();
-    if (errMsg) {
-      setFormError(errMsg);
-      return;
-    }
-
-    const normalizedTp = normalizePhone(form.tpNumber);
+    if (errMsg) return setFormError(errMsg);
 
     try {
-      await createBroker({
-        nic: String(form.nic).trim(),
-        name: String(form.name).trim(),
-        address: String(form.address).trim(),
-        city: String(form.city).trim(),
-        tpNumber: normalizedTp,
-      }).unwrap();
-
+      await createBroker(buildPayload()).unwrap();
       showToast("success", "Broker Added", "Broker created successfully.");
       close();
     } catch (err) {
@@ -215,29 +216,24 @@ const BrokerPage = () => {
 
   const onSubmitEdit = async (e) => {
     e.preventDefault();
-    if (!selected?._id) {
-      showToast("error", "Update Failed", "Missing broker id.");
-      return;
-    }
+    if (!selected?._id) return showToast("error", "Update Failed", "Missing broker id.");
 
     const errMsg = validateForm();
-    if (errMsg) {
-      setFormError(errMsg);
-      return;
-    }
+    if (errMsg) return setFormError(errMsg);
 
-    const normalizedTp = normalizePhone(form.tpNumber);
+    // ✅ update supports clearing nic: send nic as "" to clear
+    const nicTrim = String(form.nic || "").trim();
+
+    const payload = {
+      name: String(form.name).trim(),
+      address: String(form.address).trim(),
+      city: String(form.city).trim(),
+      tpNumber: normalizePhone(form.tpNumber),
+      nic: nicTrim, // ✅ can be "" to clear on backend
+    };
 
     try {
-      await updateBroker({
-        id: selected._id,
-        nic: String(form.nic).trim(),
-        name: String(form.name).trim(),
-        address: String(form.address).trim(),
-        city: String(form.city).trim(),
-        tpNumber: normalizedTp,
-      }).unwrap();
-
+      await updateBroker({ id: selected._id, payload }).unwrap();
       showToast("success", "Broker Updated", "Broker updated successfully.");
       close();
     } catch (err) {
@@ -246,10 +242,7 @@ const BrokerPage = () => {
   };
 
   const onConfirmDelete = async () => {
-    if (!selected?._id) {
-      showToast("error", "Delete Failed", "Missing broker id.");
-      return;
-    }
+    if (!selected?._id) return showToast("error", "Delete Failed", "Missing broker id.");
     try {
       await deleteBroker(selected._id).unwrap();
       showToast("success", "Broker Deleted", "Broker deleted successfully.");
@@ -258,9 +251,6 @@ const BrokerPage = () => {
       showToast("error", "Delete Failed", err?.data?.message || "Unable to delete broker.");
     }
   };
-
-  /* --------------------------------- Render -------------------------------- */
-  const loading = listLoading || searchLoading;
 
   return (
     <>
@@ -349,7 +339,7 @@ const BrokerPage = () => {
                 ) : (
                   brokers.map((b) => (
                     <tr
-                      key={b._id || b.nic}
+                      key={b._id}
                       className="block sm:table-row mb-3 sm:mb-0 mx-2 sm:mx-0 bg-white rounded-lg sm:border-b border-gray-200"
                     >
                       <td
@@ -358,68 +348,34 @@ const BrokerPage = () => {
                         before:content-[attr(data-label)] before:block sm:before:hidden
                         before:text-[10px] before:text-gray-500 before:mb-1 font-semibold"
                       >
-                        {b.nic}
+                        {b.nic || "-"}
                       </td>
 
-                      <td
-                        data-label="Name"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
+                      <td data-label="Name" className="block sm:table-cell p-3 text-left sm:text-center before:content-[attr(data-label)] before:block sm:before:hidden before:text-[10px] before:text-gray-500 before:mb-1">
                         {b.name}
                       </td>
 
-                      <td
-                        data-label="Address"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
+                      <td data-label="Address" className="block sm:table-cell p-3 text-left sm:text-center before:content-[attr(data-label)] before:block sm:before:hidden before:text-[10px] before:text-gray-500 before:mb-1">
                         {b.address}
                       </td>
 
-                      <td
-                        data-label="City"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
+                      <td data-label="City" className="block sm:table-cell p-3 text-left sm:text-center before:content-[attr(data-label)] before:block sm:before:hidden before:text-[10px] before:text-gray-500 before:mb-1">
                         {b.city}
                       </td>
 
-                      <td
-                        data-label="TP Number"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-1"
-                      >
+                      <td data-label="TP Number" className="block sm:table-cell p-3 text-left sm:text-center before:content-[attr(data-label)] before:block sm:before:hidden before:text-[10px] before:text-gray-500 before:mb-1">
                         {b.tpNumber}
                       </td>
 
-                      <td
-                        data-label="Operation"
-                        className="block sm:table-cell p-3 text-left sm:text-center
-                        before:content-[attr(data-label)] before:block sm:before:hidden
-                        before:text-[10px] before:text-gray-500 before:mb-2"
-                      >
+                      <td data-label="Operation" className="block sm:table-cell p-3 text-left sm:text-center before:content-[attr(data-label)] before:block sm:before:hidden before:text-[10px] before:text-gray-500 before:mb-2">
                         <div className="flex justify-start sm:justify-center gap-1 sm:gap-2">
-                          <button
-                            onClick={() => openView(b)}
-                            className="rounded-md bg-blue-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
-                          >
+                          <button onClick={() => openView(b)} className="rounded-md bg-blue-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold">
                             View
                           </button>
-                          <button
-                            onClick={() => openEdit(b)}
-                            className="rounded-md bg-yellow-500 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
-                          >
+                          <button onClick={() => openEdit(b)} className="rounded-md bg-yellow-500 px-2 py-1 text-white text-[10px] sm:text-sm font-bold">
                             Update
                           </button>
-                          <button
-                            onClick={() => openDelete(b)}
-                            className="rounded-md bg-red-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold"
-                          >
+                          <button onClick={() => openDelete(b)} className="rounded-md bg-red-600 px-2 py-1 text-white text-[10px] sm:text-sm font-bold">
                             Delete
                           </button>
                         </div>
@@ -437,18 +393,18 @@ const BrokerPage = () => {
         </div>
       </div>
 
-      {/* ------------------------------ ADD MODAL ------------------------------ */}
+      {/* ADD */}
       {modal === "add" && (
         <ModalShell title="Add Broker" onClose={close}>
           <form onSubmit={onSubmitAdd} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-gray-700">NIC</label>
+                <label className="text-xs font-bold text-gray-700">NIC (Optional)</label>
                 <input
                   value={form.nic}
                   onChange={(e) => setForm((p) => ({ ...p, nic: e.target.value }))}
                   className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
-                  placeholder="200110801867 or 94674433786V"
+                  placeholder="Optional"
                 />
               </div>
 
@@ -496,18 +452,10 @@ const BrokerPage = () => {
             {formError ? <p className="text-xs text-red-600 font-semibold">{formError}</p> : null}
 
             <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={close}
-                className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300"
-              >
+              <button type="button" onClick={close} className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300">
                 Cancel
               </button>
-              <button
-                type="submit"
-                disabled={creating}
-                className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60"
-              >
+              <button type="submit" disabled={creating} className="rounded-xl bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700 disabled:opacity-60">
                 {creating ? "Saving..." : "Save"}
               </button>
             </div>
@@ -515,63 +463,48 @@ const BrokerPage = () => {
         </ModalShell>
       )}
 
-      {/* ------------------------------ VIEW MODAL ----------------------------- */}
-      {modal === "view" && (
+      {/* VIEW */}
+      {modal === "view" && selected && (
         <ModalShell title="Broker Details" onClose={close}>
-          {!selected ? (
-            <p className="text-sm text-gray-600">No broker selected.</p>
-          ) : (
-            <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="rounded-xl border p-3">
-                  <div className="text-xs text-gray-500">NIC</div>
-                  <div className="font-bold">{selected.nic}</div>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <div className="text-xs text-gray-500">Name</div>
-                  <div className="font-bold">{selected.name}</div>
-                </div>
-                <div className="rounded-xl border p-3 sm:col-span-2">
-                  <div className="text-xs text-gray-500">Address</div>
-                  <div className="font-bold">{selected.address}</div>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <div className="text-xs text-gray-500">City</div>
-                  <div className="font-bold">{selected.city}</div>
-                </div>
-                <div className="rounded-xl border p-3">
-                  <div className="text-xs text-gray-500">TP Number</div>
-                  <div className="font-bold">{selected.tpNumber}</div>
-                </div>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={close}
-                  className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800"
-                >
-                  Close
-                </button>
-              </div>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-500">NIC</span>
+              <span className="font-bold">{selected.nic || "-"}</span>
             </div>
-          )}
+            <div className="flex justify-between">
+              <span className="text-gray-500">Name</span>
+              <span className="font-bold">{selected.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Address</span>
+              <span className="font-bold">{selected.address}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">City</span>
+              <span className="font-bold">{selected.city}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">TP</span>
+              <span className="font-bold">{selected.tpNumber}</span>
+            </div>
+          </div>
         </ModalShell>
       )}
 
-      {/* ------------------------------ EDIT MODAL ----------------------------- */}
-      {modal === "edit" && (
+      {/* EDIT */}
+      {modal === "edit" && selected && (
         <ModalShell title="Update Broker" onClose={close}>
           <form onSubmit={onSubmitEdit} className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-gray-700">NIC</label>
+                <label className="text-xs font-bold text-gray-700">NIC (Optional)</label>
                 <input
                   value={form.nic}
                   onChange={(e) => setForm((p) => ({ ...p, nic: e.target.value }))}
                   className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
+                  placeholder="Optional (clear to remove)"
                 />
               </div>
-
               <div>
                 <label className="text-xs font-bold text-gray-700">Name</label>
                 <input
@@ -580,7 +513,6 @@ const BrokerPage = () => {
                   className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
-
               <div className="sm:col-span-2">
                 <label className="text-xs font-bold text-gray-700">Address</label>
                 <input
@@ -589,7 +521,6 @@ const BrokerPage = () => {
                   className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
-
               <div>
                 <label className="text-xs font-bold text-gray-700">City</label>
                 <input
@@ -598,7 +529,6 @@ const BrokerPage = () => {
                   className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
-
               <div>
                 <label className="text-xs font-bold text-gray-700">TP Number</label>
                 <input
@@ -612,18 +542,10 @@ const BrokerPage = () => {
             {formError ? <p className="text-xs text-red-600 font-semibold">{formError}</p> : null}
 
             <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={close}
-                className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300"
-              >
+              <button type="button" onClick={close} className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300">
                 Cancel
               </button>
-              <button
-                type="submit"
-                disabled={updating}
-                className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-bold text-white hover:bg-yellow-600 disabled:opacity-60"
-              >
+              <button type="submit" disabled={updating} className="rounded-xl bg-yellow-500 px-4 py-2 text-sm font-bold text-white hover:bg-yellow-600 disabled:opacity-60">
                 {updating ? "Updating..." : "Update"}
               </button>
             </div>
@@ -631,44 +553,26 @@ const BrokerPage = () => {
         </ModalShell>
       )}
 
-      {/* ----------------------------- DELETE MODAL ---------------------------- */}
-      {modal === "delete" && (
+      {/* DELETE */}
+      {modal === "delete" && selected && (
         <ModalShell title="Delete Broker" onClose={close}>
-          {!selected ? (
-            <p className="text-sm text-gray-600">No broker selected.</p>
-          ) : (
-            <>
-              <p className="text-sm text-gray-700">
-                Are you sure you want to delete{" "}
-                <span className="font-extrabold text-red-700">{selected.name}</span>?
-              </p>
+          <p className="text-sm text-gray-700">
+            Are you sure you want to delete{" "}
+            <span className="font-extrabold text-red-700">{selected.name}</span>?
+          </p>
 
-              <div className="mt-4 rounded-xl border p-3 text-sm">
-                <div className="text-xs text-gray-500">NIC</div>
-                <div className="font-bold">{selected.nic}</div>
-                <div className="text-xs text-gray-500 mt-2">TP</div>
-                <div className="font-bold">{selected.tpNumber}</div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4">
-                <button
-                  type="button"
-                  onClick={close}
-                  className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-300"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={onConfirmDelete}
-                  disabled={deleting}
-                  className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-60"
-                >
-                  {deleting ? "Deleting..." : "Delete"}
-                </button>
-              </div>
-            </>
-          )}
+          <div className="mt-4 flex gap-2">
+            <button onClick={close} className="w-full rounded-xl bg-gray-200 px-4 py-2 font-extrabold text-gray-800 hover:bg-gray-300">
+              Cancel
+            </button>
+            <button
+              onClick={onConfirmDelete}
+              disabled={deleting}
+              className="w-full rounded-xl bg-red-600 px-4 py-2 font-extrabold text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {deleting ? "Deleting..." : "Yes, Delete"}
+            </button>
+          </div>
         </ModalShell>
       )}
     </>

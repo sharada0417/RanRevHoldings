@@ -7,11 +7,11 @@ const money = (n) => Number(n || 0).toLocaleString("en-LK");
 const PayStatusPill = ({ status }) => {
   const map = {
     complete: {
-      text: "Nothing To Pay Now",
+      text: "Complete",
       cls: "bg-green-100 text-green-800 border-green-200",
     },
     pending: {
-      text: "Payable Now",
+      text: "Pending",
       cls: "bg-yellow-100 text-yellow-800 border-yellow-200",
     },
   };
@@ -35,12 +35,12 @@ const ViewBrokersPage = () => {
 
   const brokers = useMemo(() => brokersRes?.data || [], [brokersRes]);
 
-  const [totalsByNic, setTotalsByNic] = useState({}); // NIC -> totals
+  const [totalsByNic, setTotalsByNic] = useState({}); // NIC -> { totalCommission, pending, status }
 
   const filtered = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (!q) return brokers;
-    return brokers.filter((b) => `${b.nic} ${b.name}`.toLowerCase().includes(q));
+    return brokers.filter((b) => `${b.nic || ""} ${b.name || ""}`.toLowerCase().includes(q));
   }, [brokers, searchText]);
 
   const loadSummary = async (nic) => {
@@ -50,20 +50,20 @@ const ViewBrokersPage = () => {
     try {
       const res = await triggerSummary(key).unwrap();
 
-      const totalPayable = res?.totals?.totalBrokerPayable ?? 0;     // full payable
-      const totalPending = res?.totals?.totalBrokerPending ?? 0;     // full pending
-      const nowPayable = res?.totals?.totalNowPayable ?? 0;          // ✅ payable now
+      // ✅ backend totals
+      const totalCommission = res?.totals?.totalCommission ?? 0;
+      const pending = res?.totals?.pending ?? 0;
 
-      const status = Number(nowPayable) > 0 ? "pending" : "complete";
+      const status = Number(pending) > 0 ? "pending" : "complete";
 
       setTotalsByNic((prev) => ({
         ...prev,
-        [key]: { totalPayable, totalPending, nowPayable, status },
+        [key]: { totalCommission, pending, status },
       }));
     } catch {
       setTotalsByNic((prev) => ({
         ...prev,
-        [key]: { totalPayable: 0, totalPending: 0, nowPayable: 0, status: "complete" },
+        [key]: { totalCommission: 0, pending: 0, status: "complete" },
       }));
     }
   };
@@ -72,13 +72,13 @@ const ViewBrokersPage = () => {
   useEffect(() => {
     filtered.slice(0, 50).forEach((b) => {
       const nic = String(b.nic || "").trim().toUpperCase();
-      if (!totalsByNic[nic]) loadSummary(nic);
+      if (nic && !totalsByNic[nic]) loadSummary(nic);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered]);
 
   const onRefresh = async () => {
-    setTotalsByNic({}); // ✅ clear cache so it reloads updated totals
+    setTotalsByNic({});
     await refetch();
   };
 
@@ -121,10 +121,10 @@ const ViewBrokersPage = () => {
               <thead className="hidden sm:table-header-group">
                 <tr className="bg-gray-100 text-sm">
                   <th className="p-3 w-[160px]">Broker NIC</th>
-                  <th className="p-3 w-[220px]">Broker Name</th>
-                  <th className="p-3 w-[220px]">Total Pay Money</th>
-                  <th className="p-3 w-[220px]">Pending We Want To Pay (NOW)</th>
-                  <th className="p-3 w-[180px]">Status</th>
+                  <th className="p-3 w-[240px]">Broker Name</th>
+                  <th className="p-3 w-[220px]">Total Commission</th>
+                  <th className="p-3 w-[220px]">Pending Payment</th>
+                  <th className="p-3 w-[160px]">Status</th>
                 </tr>
               </thead>
 
@@ -133,20 +133,20 @@ const ViewBrokersPage = () => {
                   const nic = String(b.nic || "").trim().toUpperCase();
                   const totals = totalsByNic[nic];
 
-                  const totalPayable = totals?.totalPayable ?? 0;
-                  const nowPayable = totals?.nowPayable ?? 0;
+                  const totalCommission = totals?.totalCommission ?? 0;
+                  const pending = totals?.pending ?? 0;
                   const status = totals?.status ?? "pending";
 
                   return (
                     <tr
-                      key={nic}
+                      key={nic || b._id}
                       className="block sm:table-row border-b sm:border-gray-200 px-2 sm:px-0"
                     >
                       {[
                         ["Broker NIC", nic || "-"],
                         ["Broker Name", b.name || "-"],
-                        ["Total Pay Money", `Rs. ${money(totalPayable)}`],
-                        ["Pending We Want To Pay (NOW)", `Rs. ${money(nowPayable)}`],
+                        ["Total Commission", `Rs. ${money(totalCommission)}`],
+                        ["Pending Payment", `Rs. ${money(pending)}`],
                       ].map(([label, value]) => (
                         <td
                           key={label}
@@ -160,7 +160,7 @@ const ViewBrokersPage = () => {
                             before:text-[10px] before:text-gray-500 before:mb-1
                           "
                         >
-                          <div className="sm:truncate sm:max-w-[220px] mx-auto">{value}</div>
+                          <div className="sm:truncate sm:max-w-[240px] mx-auto">{value}</div>
                         </td>
                       ))}
 

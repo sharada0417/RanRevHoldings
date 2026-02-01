@@ -10,12 +10,30 @@ import { openAssetModal, closeAssetModal } from "../api/features/assetSlice";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
-/* ---------- Modal UI (small height + scroll) ---------- */
+/* ---------- helpers ---------- */
+const formatDateCell = (d) => {
+  if (!d) return "-";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "-";
+  return dt.toLocaleDateString();
+};
+
+const toDateKey = (d) => {
+  if (!d) return "";
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return "";
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`; // useful for search
+};
+
+/* ---------- Modal UI ---------- */
 const ModalShell = ({ title, children, onClose }) => (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3">
-    <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl">
+    <div className="w-full max-w-xl rounded-2xl bg-white shadow-xl overflow-hidden">
       <div className="flex items-center justify-between border-b px-5 py-3">
-        <h3 className="text-base text-blue-800">{title}</h3>
+        <h3 className="text-base font-extrabold text-blue-800">{title}</h3>
         <button
           onClick={onClose}
           className="rounded-lg px-3 py-1 text-sm text-gray-600 hover:bg-gray-100"
@@ -23,21 +41,13 @@ const ModalShell = ({ title, children, onClose }) => (
           ✕
         </button>
       </div>
-
-      {/* ✅ smaller modal, scroll inside */}
       <div className="p-4 max-h-[70vh] overflow-auto">{children}</div>
     </div>
   </div>
 );
 
-/* ---------- Dropdown Select (Customer / Broker) ---------- */
-const PersonSelect = ({
-  label,
-  valueId,
-  onChangeId,
-  list,
-  placeholder = "Select...",
-}) => {
+/* ---------- Dropdown Select ---------- */
+const PersonSelect = ({ label, valueId, onChangeId, list, placeholder = "Select..." }) => {
   const selectedObj = useMemo(() => {
     if (!valueId) return null;
     return list.find((x) => x?._id === valueId) || null;
@@ -63,12 +73,12 @@ const PersonSelect = ({
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div className="rounded-xl bg-gray-50 p-3">
           <div className="text-[11px] text-gray-500">Selected Name</div>
-          <div className="text-sm text-gray-900">{selectedObj?.name || "-"}</div>
+          <div className="text-sm text-gray-900 break-words">{selectedObj?.name || "-"}</div>
         </div>
 
         <div className="rounded-xl bg-gray-50 p-3">
           <div className="text-[11px] text-gray-500">Selected NIC</div>
-          <div className="text-sm text-gray-900">{selectedObj?.nic || "-"}</div>
+          <div className="text-sm text-gray-900 break-words">{selectedObj?.nic || "-"}</div>
         </div>
       </div>
 
@@ -87,7 +97,6 @@ const PersonSelect = ({
 
 /* ---------- Asset Form ---------- */
 const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
-  // store ids only (for dropdown)
   const [customerId, setCustomerId] = useState("");
   const [brokerId, setBrokerId] = useState("");
 
@@ -98,7 +107,6 @@ const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
   const [estimateAmount, setEstimateAmount] = useState("");
   const [assetDescription, setAssetDescription] = useState("");
 
-  // load initial (edit)
   useEffect(() => {
     const c = initial?.customerId;
     const b = initial?.brokerId;
@@ -118,7 +126,6 @@ const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
     setAssetDescription(initial?.assetDescription || "");
   }, [initial]);
 
-  // clear irrelevant fields
   useEffect(() => {
     if (assetType !== "vehicle") setVehicleNumber("");
     if (assetType !== "land") setLandAddress("");
@@ -149,12 +156,12 @@ const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
       landAddress: assetType === "land" ? landAddress.trim() : "",
       estimateAmount: amt,
       assetDescription: assetDescription.trim(),
+      // ✅ no assetDate anymore
     });
   };
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      {/* ✅ Customer dropdown */}
       <PersonSelect
         label="Customer"
         valueId={customerId}
@@ -163,7 +170,6 @@ const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
         placeholder="Select Customer (NIC - Name)"
       />
 
-      {/* ✅ Broker dropdown */}
       <PersonSelect
         label="Broker"
         valueId={brokerId}
@@ -260,7 +266,7 @@ const AssetForm = ({ initial, customers, brokers, onSubmit, isLoading }) => {
 
 const AssetPage = () => {
   const dispatch = useDispatch();
-  const { modal, selected } = useSelector((s) => s.asset);
+  const { modal, selected } = useSelector((s) => s.asset || { modal: null, selected: null });
 
   const [searchText, setSearchText] = useState("");
 
@@ -300,7 +306,7 @@ const AssetPage = () => {
 
   const assetsRaw = listRes?.data || [];
 
-  // ✅ search includes customer/broker nic+name
+  // ✅ search includes customer/broker nic+name + createdAt
   const assets = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (!q) return assetsRaw;
@@ -308,6 +314,8 @@ const AssetPage = () => {
     return assetsRaw.filter((a) => {
       const c = a?.customerId && typeof a.customerId === "object" ? a.customerId : null;
       const b = a?.brokerId && typeof a.brokerId === "object" ? a.brokerId : null;
+
+      const dateStr = toDateKey(a?.createdAt);
 
       const hay = [
         a?.assetName,
@@ -319,6 +327,7 @@ const AssetPage = () => {
         c?.name,
         b?.nic,
         b?.name,
+        dateStr,
       ]
         .filter(Boolean)
         .join(" ")
@@ -368,14 +377,14 @@ const AssetPage = () => {
   return (
     <div className="w-full flex justify-center">
       <div className="w-full max-w-6xl px-3 sm:px-6 py-4 sm:py-6 min-w-0">
-        <h1 className="text-2xl sm:text-3xl text-blue-800 text-center">Assets</h1>
+        <h1 className="text-2xl sm:text-3xl font-extrabold text-blue-800 text-center">Assets</h1>
 
         <div className="mt-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2">
           <input
             type="text"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search (asset / customer nic+name / broker nic+name)"
+            placeholder="Search (asset / customer / broker / date)"
             className="w-full sm:w-[560px] rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-400"
           />
           <button
@@ -389,114 +398,131 @@ const AssetPage = () => {
 
         <div className="mt-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
           <p className="text-xs sm:text-sm text-gray-600 text-center sm:text-left">
-            Total: {assets.length}
+            Total: <span className="font-bold">{assets.length}</span>
           </p>
 
           <div className="flex justify-center sm:justify-end">
             <button
               onClick={handleAdd}
-              className="w-full sm:w-auto rounded-lg bg-green-600 px-4 py-2 text-xs sm:text-sm text-white hover:bg-green-700 transition"
+              className="w-full sm:w-auto rounded-lg bg-green-600 px-4 py-2 text-xs sm:text-sm text-white font-bold hover:bg-green-700 transition"
             >
               + Add Asset
             </button>
           </div>
         </div>
 
-        <div className="mt-4 w-full overflow-x-auto bg-white rounded-xl shadow-sm">
-          <table className="w-full min-w-[1100px]">
-            <thead className="hidden sm:table-header-group">
-              <tr className="bg-gray-100 text-gray-800 text-sm">
-                <th className="p-3 text-center">Customer</th>
-                <th className="p-3 text-center">Broker</th>
-                <th className="p-3 text-center">Asset</th>
-                <th className="p-3 text-center">Type</th>
-                <th className="p-3 text-center">Amount</th>
-                <th className="p-3 text-center">Description</th>
-                <th className="p-3 text-center">Operation</th>
-              </tr>
-            </thead>
-
-            <tbody className="block sm:table-row-group">
-              {loadingList ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-gray-500">Loading...</td>
+        <div className="mt-4 w-full bg-white rounded-xl shadow-sm border border-gray-100">
+          <div className="w-full">
+            <table className="w-full table-fixed">
+              <thead className="hidden sm:table-header-group">
+                <tr className="bg-gray-100 text-gray-800 text-sm">
+                  <th className="p-3 text-center w-[110px]">Date</th>
+                  <th className="p-3 text-center w-[180px]">Customer</th>
+                  <th className="p-3 text-center w-[180px]">Broker</th>
+                  <th className="p-3 text-center w-[160px]">Asset</th>
+                  <th className="p-3 text-center w-[90px]">Type</th>
+                  <th className="p-3 text-center w-[120px]">Amount</th>
+                  <th className="p-3 text-center hidden md:table-cell">Description</th>
+                  <th className="p-3 text-center w-[190px]">Operation</th>
                 </tr>
-              ) : listError ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-red-500">
-                    Failed to load assets
-                  </td>
-                </tr>
-              ) : assets.length === 0 ? (
-                <tr className="block sm:table-row">
-                  <td className="block sm:table-cell p-6 text-center text-gray-500">
-                    No assets found
-                  </td>
-                </tr>
-              ) : (
-                assets.map((a) => {
-                  const c = a?.customerId && typeof a.customerId === "object" ? a.customerId : null;
-                  const b = a?.brokerId && typeof a.brokerId === "object" ? a.brokerId : null;
+              </thead>
 
-                  return (
-                    <tr
-                      key={a._id}
-                      className="block sm:table-row mb-3 sm:mb-0 mx-2 sm:mx-0 bg-white rounded-lg sm:border-b border-gray-200"
-                    >
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        <div className="text-gray-900">{c?.name || "-"}</div>
-                        <div className="text-[11px] text-gray-500">{c?.nic || "-"}</div>
-                      </td>
+              <tbody className="block sm:table-row-group">
+                {loadingList ? (
+                  <tr className="block sm:table-row">
+                    <td className="block sm:table-cell p-6 text-center text-gray-500">Loading...</td>
+                  </tr>
+                ) : listError ? (
+                  <tr className="block sm:table-row">
+                    <td className="block sm:table-cell p-6 text-center text-red-500">
+                      Failed to load assets
+                    </td>
+                  </tr>
+                ) : assets.length === 0 ? (
+                  <tr className="block sm:table-row">
+                    <td className="block sm:table-cell p-6 text-center text-gray-500">
+                      No assets found
+                    </td>
+                  </tr>
+                ) : (
+                  assets.map((a) => {
+                    const c =
+                      a?.customerId && typeof a.customerId === "object" ? a.customerId : null;
+                    const b = a?.brokerId && typeof a.brokerId === "object" ? a.brokerId : null;
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        <div className="text-gray-900">{b?.name || "-"}</div>
-                        <div className="text-[11px] text-gray-500">{b?.nic || "-"}</div>
-                      </td>
+                    return (
+                      <tr
+                        key={a._id}
+                        className="block sm:table-row mx-2 sm:mx-0 mb-3 sm:mb-0 bg-white rounded-xl sm:rounded-none sm:border-b border-gray-200"
+                      >
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Date:</span>
+                          {formatDateCell(a?.createdAt)}
+                        </td>
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        {a?.assetName || "-"}
-                      </td>
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">
+                            Customer:
+                          </span>
+                          <div className="text-gray-900 break-words">{c?.name || "-"}</div>
+                          <div className="text-[11px] text-gray-500 break-words">{c?.nic || "-"}</div>
+                        </td>
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        {a?.assetType || "-"}
-                      </td>
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Broker:</span>
+                          <div className="text-gray-900 break-words">{b?.name || "-"}</div>
+                          <div className="text-[11px] text-gray-500 break-words">{b?.nic || "-"}</div>
+                        </td>
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        {a?.estimateAmount ?? "-"}
-                      </td>
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Asset:</span>
+                          {a?.assetName || "-"}
+                        </td>
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        {a?.assetDescription || "-"}
-                      </td>
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Type:</span>
+                          {a?.assetType || "-"}
+                        </td>
 
-                      <td className="block sm:table-cell p-3 text-left sm:text-center">
-                        <div className="flex justify-start sm:justify-center gap-1 sm:gap-2">
-                          <button
-                            onClick={() => handleView(a)}
-                            className="rounded-md bg-blue-600 px-2 py-1 text-white text-[10px] sm:text-sm"
-                          >
-                            View
-                          </button>
-                          <button
-                            onClick={() => handleEdit(a)}
-                            className="rounded-md bg-yellow-500 px-2 py-1 text-white text-[10px] sm:text-sm"
-                          >
-                            Update
-                          </button>
-                          <button
-                            onClick={() => handleDeleteAsk(a)}
-                            className="rounded-md bg-red-600 px-2 py-1 text-white text-[10px] sm:text-sm"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top break-words">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Amount:</span>
+                          {a?.estimateAmount ?? "-"}
+                        </td>
+
+                        <td className="hidden md:table-cell p-3 text-center align-top break-words">
+                          {a?.assetDescription || "-"}
+                        </td>
+
+                        <td className="block sm:table-cell p-3 text-left sm:text-center align-top">
+                          <span className="sm:hidden text-[11px] text-gray-500 mr-2">Action:</span>
+                          <div className="flex flex-wrap justify-start sm:justify-center gap-2">
+                            <button
+                              onClick={() => handleView(a)}
+                              className="rounded-md bg-blue-600 px-3 py-1 text-white text-[11px] sm:text-sm"
+                            >
+                              View
+                            </button>
+                            <button
+                              onClick={() => handleEdit(a)}
+                              className="rounded-md bg-yellow-500 px-3 py-1 text-white text-[11px] sm:text-sm"
+                            >
+                              Update
+                            </button>
+                            <button
+                              onClick={() => handleDeleteAsk(a)}
+                              className="rounded-md bg-red-600 px-3 py-1 text-white text-[11px] sm:text-sm"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -517,53 +543,68 @@ const AssetPage = () => {
       {modal === "view" && selected && (
         <ModalShell title="Asset Details" onClose={close}>
           {(() => {
-            const c = selected?.customerId && typeof selected.customerId === "object" ? selected.customerId : null;
-            const b = selected?.brokerId && typeof selected.brokerId === "object" ? selected.brokerId : null;
+            const c =
+              selected?.customerId && typeof selected.customerId === "object"
+                ? selected.customerId
+                : null;
+            const b =
+              selected?.brokerId && typeof selected.brokerId === "object"
+                ? selected.brokerId
+                : null;
 
             return (
               <div className="space-y-2 text-sm text-gray-800">
                 <div className="flex justify-between gap-4">
+                  <span className="text-gray-500">Date</span>
+                  <span className="text-right">{formatDateCell(selected?.createdAt)}</span>
+                </div>
+
+                <div className="flex justify-between gap-4">
                   <span className="text-gray-500">Customer</span>
-                  <span className="text-right">{c?.name || "-"} {c?.nic ? `(${c.nic})` : ""}</span>
+                  <span className="text-right">
+                    {c?.name || "-"} {c?.nic ? `(${c.nic})` : ""}
+                  </span>
                 </div>
 
                 <div className="flex justify-between gap-4">
                   <span className="text-gray-500">Broker</span>
-                  <span className="text-right">{b?.name || "-"} {b?.nic ? `(${b.nic})` : ""}</span>
+                  <span className="text-right">
+                    {b?.name || "-"} {b?.nic ? `(${b.nic})` : ""}
+                  </span>
                 </div>
 
                 <div className="flex justify-between">
                   <span className="text-gray-500">Asset Name</span>
-                  <span>{selected?.assetName || "-"}</span>
+                  <span className="text-right break-words">{selected?.assetName || "-"}</span>
                 </div>
 
                 <div className="flex justify-between">
                   <span className="text-gray-500">Type</span>
-                  <span>{selected?.assetType || "-"}</span>
+                  <span className="text-right">{selected?.assetType || "-"}</span>
                 </div>
 
                 {selected?.assetType === "vehicle" && (
                   <div className="flex justify-between">
                     <span className="text-gray-500">Vehicle Number</span>
-                    <span>{selected?.vehicleNumber || "-"}</span>
+                    <span className="text-right break-words">{selected?.vehicleNumber || "-"}</span>
                   </div>
                 )}
 
                 {selected?.assetType === "land" && (
                   <div className="flex justify-between gap-4">
                     <span className="text-gray-500">Land Address</span>
-                    <span className="text-right">{selected?.landAddress || "-"}</span>
+                    <span className="text-right break-words">{selected?.landAddress || "-"}</span>
                   </div>
                 )}
 
                 <div className="flex justify-between">
                   <span className="text-gray-500">Amount</span>
-                  <span>{selected?.estimateAmount ?? "-"}</span>
+                  <span className="text-right">{selected?.estimateAmount ?? "-"}</span>
                 </div>
 
                 <div className="flex justify-between gap-4">
                   <span className="text-gray-500">Description</span>
-                  <span className="text-right">{selected?.assetDescription || "-"}</span>
+                  <span className="text-right break-words">{selected?.assetDescription || "-"}</span>
                 </div>
 
                 <button
@@ -595,7 +636,7 @@ const AssetPage = () => {
       {modal === "delete" && selected && (
         <ModalShell title="Delete Asset" onClose={close}>
           <p className="text-sm text-gray-700">
-            Are you sure you want to delete {selected?.assetName || "this asset"}?
+            Are you sure you want to delete <b>{selected?.assetName || "this asset"}</b>?
           </p>
 
           <div className="mt-4 flex gap-2">

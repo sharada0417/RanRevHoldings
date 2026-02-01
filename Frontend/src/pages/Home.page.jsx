@@ -24,7 +24,8 @@ const formatLKR = (n) =>
   })}`;
 
 const monthNames = [
-  "January","February","March","April","May","June","July","August","September","October","November","December",
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
 ];
 
 const Button = ({ active, children, ...props }) => (
@@ -41,15 +42,10 @@ const Button = ({ active, children, ...props }) => (
 
 const Card = ({ title, value, label, children }) => (
   <div className="bg-gray-200 rounded-2xl shadow-md w-full p-4 sm:p-6">
-    <h1 className="text-blue-800 font-extrabold text-lg sm:text-xl md:text-2xl">
-      {title}
-    </h1>
+    <h1 className="text-blue-800 font-extrabold text-lg sm:text-xl md:text-2xl">{title}</h1>
 
     <div className="mt-1 flex flex-wrap items-baseline gap-2">
-      <h2 className="text-blue-700 font-semibold text-sm sm:text-base md:text-lg">
-        {value}
-      </h2>
-
+      <h2 className="text-blue-700 font-semibold text-sm sm:text-base md:text-lg">{value}</h2>
       {label ? (
         <span className="text-xs sm:text-sm font-semibold text-blue-800/80 bg-white/60 px-2 py-0.5 rounded-full">
           {label}
@@ -57,13 +53,11 @@ const Card = ({ title, value, label, children }) => (
       ) : null}
     </div>
 
-    <div className="mt-4 w-full h-[220px] sm:h-[240px] md:h-[260px]">
-      {children}
-    </div>
+    <div className="mt-4 w-full h-[220px] sm:h-[240px] md:h-[260px]">{children}</div>
   </div>
 );
 
-const MonthBarChart = ({ data }) => (
+const SimpleBarChart = ({ data }) => (
   <ResponsiveContainer width="100%" height="100%">
     <BarChart data={data} barSize={22}>
       <CartesianGrid strokeDasharray="3 3" />
@@ -82,7 +76,7 @@ export default function HomePage() {
 
   const [granularity, setGranularity] = useState("month"); // day | month | year
   const [year, setYear] = useState(defaultYear);
-  const [month, setMonth] = useState(defaultMonth); // used for day + monthly review
+  const [month, setMonth] = useState(defaultMonth);
 
   const { data, isLoading, isFetching, isError } = useGetDashboardSummaryQuery({
     granularity,
@@ -93,49 +87,47 @@ export default function HomePage() {
   const labels = data?.labels || [];
   const series = data?.series || {};
   const totals = data?.totals || {};
+
   const review = data?.monthlyReview || {
     monthLabel: monthNames[month - 1],
-    customerPayThisMonth: 0,
-    brokerPayThisMonth: 0,
+    customerPayThisMonth: 0,         // full paid
+    brokerPayThisMonth: 0,           // broker paid
+    realProfitThisMonth: 0,          // interest - broker paid
+    customerInterestThisMonth: 0,    // interest only
     investmentThisMonth: 0,
   };
-
-  const chartInvestment = useMemo(() => {
-    return labels.map((label, i) => ({
-      label,
-      value: Number(series?.investment?.[i] || 0),
-    }));
-  }, [labels, series]);
-
-  const chartBrokerCommission = useMemo(() => {
-    return labels.map((label, i) => ({
-      label,
-      value: Number(series?.brokerCommission?.[i] || 0),
-    }));
-  }, [labels, series]);
-
-  const chartProfit = useMemo(() => {
-    return labels.map((label, i) => ({
-      label,
-      value: Number(series?.profit?.[i] || 0),
-    }));
-  }, [labels, series]);
-
-  const monthlyReviewData = useMemo(() => {
-    return [
-      { name: "Brokers Pay (We Paid)", value: Number(review?.brokerPayThisMonth || 0) },
-      { name: "Customers Pay (We Got)", value: Number(review?.customerPayThisMonth || 0) },
-      { name: "Investment (This Month)", value: Number(review?.investmentThisMonth || 0) },
-    ];
-  }, [review]);
-
-  const PIE_COLORS = ["#1D4ED8", "#2563EB", "#60A5FA"];
 
   const topLabel = useMemo(() => {
     if (granularity === "day") return `${monthNames[month - 1]} ${year} (Day Wise)`;
     if (granularity === "month") return `Year ${year} (Month Wise)`;
     return `Last 5 Years (Year Wise)`;
   }, [granularity, year, month]);
+
+  const chartInvestment = useMemo(
+    () => labels.map((label, i) => ({ label, value: Number(series?.investment?.[i] || 0) })),
+    [labels, series]
+  );
+
+  const chartBrokerPay = useMemo(
+    () => labels.map((label, i) => ({ label, value: Number(series?.brokerPay?.[i] || 0) })),
+    [labels, series]
+  );
+
+  // ✅ real profit = customer interest received - broker commission paid
+  const chartRealProfit = useMemo(
+    () => labels.map((label, i) => ({ label, value: Number(series?.realProfit?.[i] || 0) })),
+    [labels, series]
+  );
+
+  const monthlyReviewData = useMemo(() => {
+    return [
+      { name: "Customer Pay (Full)", value: Number(review?.customerPayThisMonth || 0) },
+      { name: "Broker Pay (Commission Paid)", value: Number(review?.brokerPayThisMonth || 0) },
+      { name: "Real Profit (Interest - Broker)", value: Number(review?.realProfitThisMonth || 0) },
+    ];
+  }, [review]);
+
+  const PIE_COLORS = ["#1D4ED8", "#2563EB", "#60A5FA"];
 
   return (
     <div className="p-4 sm:p-6 md:p-10 w-full min-h-screen">
@@ -184,7 +176,7 @@ export default function HomePage() {
               value={month}
               onChange={(e) => setMonth(Number(e.target.value))}
               className="rounded-xl px-3 py-2 text-sm bg-white"
-              disabled={granularity === "year"} // not needed for yearwise
+              disabled={granularity === "year"}
               title={granularity === "year" ? "Month is not needed for Year Wise view" : ""}
             >
               {monthNames.map((m, idx) => (
@@ -203,30 +195,22 @@ export default function HomePage() {
       {/* GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Total Investment */}
-        <Card
-          title="Total Investment"
-          value={formatLKR(totals?.totalInvestment)}
-          label={topLabel}
-        >
-          <MonthBarChart data={chartInvestment} />
+        <Card title="Total Investment" value={formatLKR(totals?.totalInvestment)} label={topLabel}>
+          <SimpleBarChart data={chartInvestment} />
         </Card>
 
-        {/* Brokers Pay (Commission Payable) */}
-        <Card
-          title="Brokers Pay (Commission Total)"
-          value={formatLKR(totals?.totalBrokerCommission)}
-          label={topLabel}
-        >
-          <MonthBarChart data={chartBrokerCommission} />
+        {/* Broker Pay */}
+        <Card title="Broker Pay (Commission We Paid)" value={formatLKR(totals?.totalBrokerPay)} label={topLabel}>
+          <SimpleBarChart data={chartBrokerPay} />
         </Card>
 
-        {/* Total Profit */}
+        {/* Real Profit */}
         <Card
-          title="Total Profit (Interest - Broker Commission)"
-          value={formatLKR(totals?.totalProfit)}
+          title="Real Profit (Customer Interest - Broker Commission)"
+          value={formatLKR(totals?.totalRealProfit)}
           label={topLabel}
         >
-          <MonthBarChart data={chartProfit} />
+          <SimpleBarChart data={chartRealProfit} />
         </Card>
 
         {/* Monthly Review */}
@@ -237,11 +221,7 @@ export default function HomePage() {
 
           <div className="mt-1 flex flex-wrap items-baseline gap-2">
             <h2 className="text-blue-700 font-semibold text-sm sm:text-base md:text-lg">
-              {formatLKR(
-                Number(review?.brokerPayThisMonth || 0) +
-                  Number(review?.customerPayThisMonth || 0) +
-                  Number(review?.investmentThisMonth || 0)
-              )}
+              {formatLKR(Number(review?.realProfitThisMonth || 0))}
             </h2>
 
             <span className="text-xs sm:text-sm font-semibold text-blue-800/80 bg-white/60 px-2 py-0.5 rounded-full">
@@ -273,18 +253,24 @@ export default function HomePage() {
 
           <div className="mt-3 space-y-1">
             <h2 className="text-blue-700 text-sm sm:text-base font-semibold">
-              Brokers pay (we paid): {formatLKR(review?.brokerPayThisMonth)}
+              Customer Pay (Full: Principal + Interest): {formatLKR(review?.customerPayThisMonth)}
             </h2>
+
             <h2 className="text-blue-700 text-sm sm:text-base font-semibold">
-              Customers pay (we got): {formatLKR(review?.customerPayThisMonth)}
+              Customer Interest (Only): {formatLKR(review?.customerInterestThisMonth)}
             </h2>
+
             <h2 className="text-blue-700 text-sm sm:text-base font-semibold">
-              Investment this month: {formatLKR(review?.investmentThisMonth)}
+              Broker Pay (Commission Paid): {formatLKR(review?.brokerPayThisMonth)}
+            </h2>
+
+            <h2 className="text-blue-700 text-sm sm:text-base font-semibold">
+              Real Profit (Interest - Broker Commission): {formatLKR(review?.realProfitThisMonth)}
             </h2>
           </div>
 
           <div className="mt-3 text-xs text-blue-800/70 font-semibold">
-            Flow: Customers pay you → you pay brokers.
+            Meaning: Real Profit = Customer Interest received − Broker commission paid.
           </div>
         </div>
       </div>

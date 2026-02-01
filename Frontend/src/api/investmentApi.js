@@ -35,6 +35,23 @@ export const investmentApi = createApi({
       query: (payload) => ({ url: "", method: "POST", body: payload }),
       invalidatesTags: [{ type: "Investment", id: "LIST" }],
     }),
+
+    updateInvestment: builder.mutation({
+      query: ({ id, payload }) => ({
+        url: `${id}`,
+        method: "PUT",
+        body: payload,
+      }),
+      invalidatesTags: (r, e, arg) => [
+        { type: "Investment", id: arg?.id },
+        { type: "Investment", id: "LIST" },
+      ],
+    }),
+
+    deleteInvestment: builder.mutation({
+      query: (id) => ({ url: `${id}`, method: "DELETE" }),
+      invalidatesTags: [{ type: "Investment", id: "LIST" }],
+    }),
   }),
 });
 
@@ -42,4 +59,6 @@ export const {
   useGetInvestmentsQuery,
   useGetInvestmentByIdQuery,
   useCreateInvestmentMutation,
+  useUpdateInvestmentMutation,
+  useDeleteInvestmentMutation,
 } = investmentApi;

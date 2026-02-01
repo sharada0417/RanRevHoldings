@@ -34,7 +34,9 @@ const ViewAssetpage = () => {
   const [searchText, setSearchText] = useState("");
   const [arrearsDays, setArrearsDays] = useState(30);
 
-  const { data, isLoading, isError, refetch } = useGetAssetFlowQuery(arrearsDays);
+  const { data, isLoading, isError, refetch } =
+    useGetAssetFlowQuery(arrearsDays);
+
   const rows = data?.data || [];
 
   const filteredRows = useMemo(() => {
@@ -47,8 +49,11 @@ const ViewAssetpage = () => {
       const brokerStr = `${r?.broker?.nic || ""} ${r?.broker?.name || ""}`;
       const moneyStr = `${r?.estimateAmount || ""} ${r?.investmentAmount || ""} ${
         r?.totalCustomerPaid || ""
-      } ${r?.pendingPayment || ""} ${r?.brokerTotalPaidAmount || ""}`;
-      return `${assetStr} ${customerStr} ${brokerStr} ${moneyStr}`.toLowerCase().includes(q);
+      }`;
+
+      return `${assetStr} ${customerStr} ${brokerStr} ${moneyStr}`
+        .toLowerCase()
+        .includes(q);
     });
   }, [rows, searchText]);
 
@@ -113,8 +118,6 @@ const ViewAssetpage = () => {
                   <th className="p-3">Estimate Amount</th>
                   <th className="p-3">Invest Amount</th>
                   <th className="p-3">Total Customer Pay</th>
-                  <th className="p-3">Pending Payment</th>
-                  <th className="p-3">Broker Total Pay</th>
                   <th className="p-3">Status</th>
                 </tr>
               </thead>
@@ -136,7 +139,9 @@ const ViewAssetpage = () => {
                         [
                           "Customer",
                           <div className="leading-tight" key="customer">
-                            <div className="font-semibold">{r?.customer?.name || "-"}</div>
+                            <div className="font-semibold">
+                              {r?.customer?.name || "-"}
+                            </div>
                             <div className="text-[11px] text-gray-500">
                               {r?.customer?.nic || "-"}
                             </div>
@@ -145,7 +150,9 @@ const ViewAssetpage = () => {
                         [
                           "Broker",
                           <div className="leading-tight" key="broker">
-                            <div className="font-semibold">{r?.broker?.name || "-"}</div>
+                            <div className="font-semibold">
+                              {r?.broker?.name || "-"}
+                            </div>
                             <div className="text-[11px] text-gray-500">
                               {r?.broker?.nic || "-"}
                             </div>
@@ -154,8 +161,6 @@ const ViewAssetpage = () => {
                         ["Estimate Amount", `Rs. ${money(r.estimateAmount)}`],
                         ["Invest Amount", `Rs. ${money(r.investmentAmount)}`],
                         ["Total Customer Pay", `Rs. ${money(r.totalCustomerPaid)}`],
-                        ["Pending Payment", `Rs. ${money(r.pendingPayment)}`],
-                        ["Broker Total Pay", `Rs. ${money(r.brokerTotalPaidAmount)}`],
                       ].map(([label, value]) => (
                         <td
                           key={label}
@@ -169,7 +174,9 @@ const ViewAssetpage = () => {
                             before:text-[10px] before:text-gray-500 before:mb-1
                           "
                         >
-                          <div className="sm:truncate sm:max-w-[220px] mx-auto">{value}</div>
+                          <div className="sm:truncate sm:max-w-[220px] mx-auto">
+                            {value}
+                          </div>
                         </td>
                       ))}
 
@@ -184,7 +191,10 @@ const ViewAssetpage = () => {
 
                 {filteredRows.length === 0 && (
                   <tr className="block sm:table-row">
-                    <td className="block sm:table-cell p-6 text-center text-gray-500" colSpan={9}>
+                    <td
+                      className="block sm:table-cell p-6 text-center text-gray-500"
+                      colSpan={7}
+                    >
                       No assets found
                     </td>
                   </tr>
@@ -196,8 +206,8 @@ const ViewAssetpage = () => {
 
         {!isLoading && !isError && (
           <div className="mt-4 text-xs text-gray-500 text-center">
-            Arrears rule: Pending &gt; 0 and last payment older than selected days (or no payment
-            yet).
+            Arrears rule: Customer pending &gt; 0 and last payment older than selected days (or no
+            payment yet).
           </div>
         )}
       </div>

@@ -4,6 +4,7 @@ const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
 
 export const brokerApi = createApi({
   reducerPath: "brokerApi",
+  tagTypes: ["Broker"],
   baseQuery: fetchBaseQuery({
     baseUrl: `${BACKEND_URL}/api/broker/`,
     prepareHeaders: (headers, { getState }) => {
@@ -12,11 +13,7 @@ export const brokerApi = createApi({
       return headers;
     },
   }),
-
-  tagTypes: ["Broker"],
-
   endpoints: (builder) => ({
-    // ✅ GET ALL
     getBrokers: builder.query({
       query: () => "",
       providesTags: (result) =>
@@ -28,7 +25,6 @@ export const brokerApi = createApi({
           : [{ type: "Broker", id: "LIST" }],
     }),
 
-    // ✅ SEARCH (nic or name)
     searchBrokers: builder.query({
       query: ({ nic, name }) => {
         const params = new URLSearchParams();
@@ -39,13 +35,11 @@ export const brokerApi = createApi({
       providesTags: [{ type: "Broker", id: "LIST" }],
     }),
 
-    // ✅ GET BY ID
     getBrokerById: builder.query({
       query: (id) => `${id}`,
       providesTags: (result, error, id) => [{ type: "Broker", id }],
     }),
 
-    // ✅ CREATE
     createBroker: builder.mutation({
       query: (payload) => ({
         url: "",
@@ -55,20 +49,18 @@ export const brokerApi = createApi({
       invalidatesTags: [{ type: "Broker", id: "LIST" }],
     }),
 
-    // ✅ UPDATE
     updateBroker: builder.mutation({
-      query: ({ id, ...payload }) => ({
+      query: ({ id, payload }) => ({
         url: `${id}`,
         method: "PUT",
         body: payload,
       }),
-      invalidatesTags: (result, error, { id }) => [
-        { type: "Broker", id },
+      invalidatesTags: (result, error, arg) => [
+        { type: "Broker", id: arg.id },
         { type: "Broker", id: "LIST" },
       ],
     }),
 
-    // ✅ DELETE
     deleteBroker: builder.mutation({
       query: (id) => ({
         url: `${id}`,
@@ -81,7 +73,6 @@ export const brokerApi = createApi({
 
 export const {
   useGetBrokersQuery,
-  useSearchBrokersQuery,
   useLazySearchBrokersQuery,
   useGetBrokerByIdQuery,
   useCreateBrokerMutation,
