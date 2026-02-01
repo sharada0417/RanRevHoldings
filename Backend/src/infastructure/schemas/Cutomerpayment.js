@@ -2,46 +2,35 @@ import mongoose from "mongoose";
 
 const CustomerPaymentSchema = new mongoose.Schema(
   {
-    customerId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Customer",
-      required: true,
-    },
-    investmentId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Investment",
-      required: true,
-    },
-    assetId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Asset",
-      required: true,
-    },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true },
+    brokerId: { type: mongoose.Schema.Types.ObjectId, ref: "Broker", required: true },
+    investmentId: { type: mongoose.Schema.Types.ObjectId, ref: "Investment", required: true },
 
-    // ✅ cash | check
-    paymentType: {
+    // ✅ CHANGED: investment can have multiple assets
+    assetIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "Asset", required: true }],
+
+    paymentType: { type: String, enum: ["cash", "check"], required: true },
+
+    payFor: {
       type: String,
-      enum: ["cash", "check"],
+      enum: ["interest", "interest+principal", "principal"],
       required: true,
+      default: "interest",
     },
 
     paidAmount: { type: Number, required: true, min: 0.01 },
 
-    // snapshot values at time of payment (audit)
-    investmentAmount: { type: Number, required: true, min: 0 },
-    interestRate: { type: Number, required: true, min: 0 },
-    interestAmount: { type: Number, required: true, min: 0 },
-    totalPayable: { type: Number, required: true, min: 0 },
+    interestPart: { type: Number, default: 0, min: 0 },
+    principalPart: { type: Number, default: 0, min: 0 },
 
-    totalPaidBefore: { type: Number, required: true, min: 0 },
-    totalPaidAfter: { type: Number, required: true, min: 0 },
+    excessAmount: { type: Number, default: 0, min: 0 },
 
-    pendingBefore: { type: Number, required: true, min: 0 },
-    pendingAfter: { type: Number, required: true, min: 0 },
+    totalInterestPaidAfter: { type: Number, default: 0, min: 0 },
+    totalPrincipalPaidAfter: { type: Number, default: 0, min: 0 },
+
+    isPrincipalFullyPaidAfter: { type: Boolean, default: false },
 
     note: { type: String, trim: true, default: "" },
-
-    // ✅ date+time
     paidAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

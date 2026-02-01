@@ -3,7 +3,6 @@ import { getBrokerPaymentHistoryTable } from "../application/brokerpaymentHistor
 
 const brokerPaymentHistoryRouter = express.Router();
 
-// ✅ table history
 // GET /api/broker/payments/history?search=
 brokerPaymentHistoryRouter.get("/history", getBrokerPaymentHistoryTable);
 

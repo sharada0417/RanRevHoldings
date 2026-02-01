@@ -6,13 +6,14 @@ const AssetSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
       required: false,
+      default: null,
     },
 
-    // ✅ NEW
     brokerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Broker",
       required: false,
+      default: null,
     },
 
     assetName: { type: String, required: true, trim: true },
@@ -29,6 +30,11 @@ const AssetSchema = new mongoose.Schema(
     estimateAmount: { type: Number, required: true, min: 0 },
 
     assetDescription: { type: String, trim: true, default: "" },
+
+    // ✅ NEW: release asset after full settlement
+    isReleased: { type: Boolean, default: false },
+    releasedAt: { type: Date, default: null },
+    releaseNote: { type: String, trim: true, default: "" },
   },
   { timestamps: true }
 );

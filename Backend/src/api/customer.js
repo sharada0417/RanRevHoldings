@@ -10,10 +10,7 @@ import {
 
 const customerRouter = express.Router();
 
-customerRouter
-  .route("/")
-  .get(getAllCustomers)
-  .post(createCustomer);
+customerRouter.route("/").get(getAllCustomers).post(createCustomer);
 
 // ✅ IMPORTANT: /search must be BEFORE /:id
 customerRouter.get("/search", searchCustomers);

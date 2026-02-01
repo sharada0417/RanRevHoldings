@@ -5,23 +5,18 @@ import {
   getAssetById,
   updateAsset,
   deleteAssetById,
-  getAssetFlow, // ✅ NEW
+  getAssetFlow,
 } from "../application/asset.js";
 
 const assetRouter = express.Router();
 
-// ✅ NEW FLOW ROUTE (must be before "/:id")
+// ✅ flow first
 assetRouter.get("/flow", getAssetFlow);
 
-assetRouter
-  .route("/")
-  .get(getAllAssets)
-  .post(createAsset);
+// ✅ list + create
+assetRouter.route("/").get(getAllAssets).post(createAsset);
 
-assetRouter
-  .route("/:id")
-  .get(getAssetById)
-  .put(updateAsset)
-  .delete(deleteAssetById);
+// ✅ single
+assetRouter.route("/:id").get(getAssetById).put(updateAsset).delete(deleteAssetById);
 
 export default assetRouter;

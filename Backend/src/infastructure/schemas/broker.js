@@ -4,16 +4,18 @@ const BrokerSchema = new mongoose.Schema(
   {
     nic: {
       type: String,
-      required: true,
+      required: false,
       unique: true,
+      sparse: true,
       trim: true,
       uppercase: true,
+      default: null,
     },
+
     name: { type: String, required: true, trim: true },
     address: { type: String, required: true, trim: true },
     city: { type: String, required: true, trim: true },
 
-    // store as 94xxxxxxxxx
     tpNumber: { type: String, required: true, unique: true, trim: true },
   },
   { timestamps: true }

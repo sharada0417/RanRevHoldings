@@ -72,6 +72,7 @@ export const createAsset = async (req, res) => {
       landAddress: assetType === "land" ? String(landAddress).trim() : "",
       estimateAmount: Number(estimateAmount),
       assetDescription: assetDescription ? String(assetDescription).trim() : "",
+      // ✅ createdAt comes automatically from timestamps
     });
 
     return res
@@ -129,11 +130,9 @@ export const updateAsset = async (req, res) => {
       brokerId: req.body.brokerId !== undefined ? req.body.brokerId : asset.brokerId,
       assetName: req.body.assetName !== undefined ? req.body.assetName : asset.assetName,
       assetType: req.body.assetType !== undefined ? req.body.assetType : asset.assetType,
-      vehicleNumber:
-        req.body.vehicleNumber !== undefined ? req.body.vehicleNumber : asset.vehicleNumber,
+      vehicleNumber: req.body.vehicleNumber !== undefined ? req.body.vehicleNumber : asset.vehicleNumber,
       landAddress: req.body.landAddress !== undefined ? req.body.landAddress : asset.landAddress,
-      estimateAmount:
-        req.body.estimateAmount !== undefined ? req.body.estimateAmount : asset.estimateAmount,
+      estimateAmount: req.body.estimateAmount !== undefined ? req.body.estimateAmount : asset.estimateAmount,
     };
 
     const error = validateAssetPayload(next);
@@ -149,13 +148,12 @@ export const updateAsset = async (req, res) => {
     asset.landAddress = next.assetType === "land" ? String(next.landAddress).trim() : "";
     asset.estimateAmount = Number(next.estimateAmount);
 
-    if (req.body.assetDescription !== undefined)
+    if (req.body.assetDescription !== undefined) {
       asset.assetDescription = String(req.body.assetDescription).trim();
+    }
 
     const updated = await asset.save();
-    return res
-      .status(200)
-      .json({ success: true, message: "Asset updated successfully", data: updated });
+    return res.status(200).json({ success: true, message: "Asset updated successfully", data: updated });
   } catch (err) {
     console.error("updateAsset error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -179,8 +177,8 @@ export const deleteAssetById = async (req, res) => {
 };
 
 /**
- * ✅ NEW: Asset Flow
- * GET /api/assets/flow?arrearsDays=30
+ * ✅ Asset Flow (unchanged logic)
+ * ✅ Removed assetDate, now expose createdAt only
  */
 export const getAssetFlow = async (req, res) => {
   try {
@@ -189,7 +187,6 @@ export const getAssetFlow = async (req, res) => {
     const now = new Date();
 
     const flow = await Asset.aggregate([
-      // customer join
       {
         $lookup: {
           from: "customers",
@@ -200,7 +197,6 @@ export const getAssetFlow = async (req, res) => {
       },
       { $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } },
 
-      // broker join
       {
         $lookup: {
           from: "brokers",
@@ -211,22 +207,27 @@ export const getAssetFlow = async (req, res) => {
       },
       { $unwind: { path: "$broker", preserveNullAndEmptyArrays: true } },
 
-      // latest investment for this asset
       {
-        $lookup: {
-          from: "investments",
-          let: { assetId: "$_id" },
-          pipeline: [
-            { $match: { $expr: { $eq: ["$assetId", "$$assetId"] } } },
-            { $sort: { createdAt: -1 } },
-            { $limit: 1 },
-          ],
-          as: "investment",
+        // inside getAssetFlow pipeline, REPLACE this lookup:
+
+  $lookup: {
+    from: "investments",
+    let: { assetId: "$_id" },
+    pipeline: [
+      {
+        $match: {
+          $expr: { $in: ["$$assetId", "$assetIds"] }, // ✅ FIX
         },
       },
+      { $sort: { createdAt: -1 } },
+      { $limit: 1 },
+    ],
+    as: "investment",
+  },
+},
+
       { $unwind: { path: "$investment", preserveNullAndEmptyArrays: true } },
 
-      // sum customer payments by investment
       {
         $lookup: {
           from: "customerpayments",
@@ -240,7 +241,6 @@ export const getAssetFlow = async (req, res) => {
       },
       { $unwind: { path: "$customerPaySum", preserveNullAndEmptyArrays: true } },
 
-      // sum broker payments by investment
       {
         $lookup: {
           from: "brokerpayments",
@@ -254,15 +254,12 @@ export const getAssetFlow = async (req, res) => {
       },
       { $unwind: { path: "$brokerPaySum", preserveNullAndEmptyArrays: true } },
 
-      // computed fields
       {
         $addFields: {
           investmentAmount: { $ifNull: ["$investment.investmentAmount", 0] },
           totalCustomerPaid: { $ifNull: ["$customerPaySum.totalCustomerPaid", 0] },
           brokerTotalPaidAmount: { $ifNull: ["$brokerPaySum.brokerTotalPaidAmount", 0] },
           lastPaymentDate: { $ifNull: ["$investment.lastPaymentDate", null] },
-
-          // prefer remainingPendingAmount if your system maintains it
           pendingPayment: {
             $cond: [
               { $ne: ["$investment.remainingPendingAmount", null] },
@@ -283,7 +280,6 @@ export const getAssetFlow = async (req, res) => {
         },
       },
 
-      // status
       {
         $addFields: {
           isFinished: { $lte: ["$pendingPayment", 0] },
@@ -303,16 +299,11 @@ export const getAssetFlow = async (req, res) => {
       {
         $addFields: {
           paymentStatus: {
-            $cond: [
-              "$isFinished",
-              "finished",
-              { $cond: ["$isArrears", "arrears", "pending"] },
-            ],
+            $cond: ["$isFinished", "finished", { $cond: ["$isArrears", "arrears", "pending"] }],
           },
         },
       },
 
-      // output
       {
         $project: {
           _id: 1,
@@ -329,7 +320,7 @@ export const getAssetFlow = async (req, res) => {
           brokerTotalPaidAmount: 1,
 
           paymentStatus: 1,
-          createdAt: 1,
+          createdAt: 1, // ✅ only created date
         },
       },
 

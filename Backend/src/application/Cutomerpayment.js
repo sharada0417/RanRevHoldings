@@ -1,10 +1,16 @@
 import mongoose from "mongoose";
 import Customer from "../infastructure/schemas/customer.js";
+import Broker from "../infastructure/schemas/broker.js";
 import Asset from "../infastructure/schemas/asset.js";
 import Investment from "../infastructure/schemas/investement.js";
 import CustomerPayment from "../infastructure/schemas/Cutomerpayment.js";
 
-// NIC validation (same rules)
+/**
+ * NIC formats supported:
+ *  - 12 digits
+ *  - 11 digits + V/X
+ *  - 9 digits + V/X
+ */
 const isValidSriLankaNIC = (nicRaw) => {
   const nic = String(nicRaw || "").trim();
   const re12 = /^\d{12}$/;
@@ -13,411 +19,214 @@ const isValidSriLankaNIC = (nicRaw) => {
   return re12.test(nic) || re11vx.test(nic) || re9vx.test(nic);
 };
 
-// ✅ Calculations (percent-based)
-const calcInterestAmount = (investmentAmount, ratePercent) =>
-  Number(investmentAmount) * (Number(ratePercent) / 100);
+const safeNum = (v, d = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+};
 
-const calcTotalPayable = (investmentAmount, ratePercent) =>
-  Number(investmentAmount) + calcInterestAmount(investmentAmount, ratePercent);
-
-// ✅ Duration-based monthly
-const calcMonthlyInterest = (interestAmount, durationMonths) =>
-  Number(durationMonths) > 0 ? Number(interestAmount) / Number(durationMonths) : 0;
-
-const calcMonthlyTotal = (totalPayable, durationMonths) =>
-  Number(durationMonths) > 0 ? Number(totalPayable) / Number(durationMonths) : 0;
-
-/**
- * ✅ POST Pay (store history + update remaining)
- * POST /api/customer/payments/pay
- * body: { customerNic, investmentId, payAmount, paymentType, note }
- */
-export const createCustomerPayment = async (req, res) => {
-  try {
-    const { customerNic, investmentId, payAmount, paymentType, note } = req.body || {};
-
-    if (!customerNic || !investmentId || payAmount === undefined || !paymentType) {
-      return res.status(400).json({
-        success: false,
-        message: "customerNic, investmentId, payAmount, paymentType are required",
-      });
-    }
-
-    // ✅ paymentType validation
-    if (!["cash", "check"].includes(String(paymentType).toLowerCase())) {
-      return res.status(400).json({
-        success: false,
-        message: "paymentType must be cash or check",
-      });
-    }
-
-    if (!isValidSriLankaNIC(customerNic)) {
-      return res.status(400).json({ success: false, message: "Invalid customerNic format" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(investmentId)) {
-      return res.status(400).json({ success: false, message: "Invalid investmentId" });
-    }
-
-    const amountPaid = Number(payAmount);
-    if (Number.isNaN(amountPaid) || amountPaid <= 0) {
-      return res.status(400).json({ success: false, message: "payAmount must be > 0" });
-    }
-
-    const normalizedNic = String(customerNic).trim().toUpperCase();
-    const customer = await Customer.findOne({ nic: normalizedNic });
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
-    const investment = await Investment.findById(investmentId);
-    if (!investment) return res.status(404).json({ success: false, message: "Investment not found" });
-
-    if (String(investment.customerId) !== String(customer._id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Investment does not belong to this customer",
-      });
-    }
-
-    const totalPayable = calcTotalPayable(
-      investment.investmentAmount,
-      investment.investmentInterestRate
-    );
-
-    const interestAmount = calcInterestAmount(
-      investment.investmentAmount,
-      investment.investmentInterestRate
-    );
-
-    const totalPaidBefore = Number(investment.totalPaidAmount || 0);
-
-    const pendingBefore =
-      investment.remainingPendingAmount === null || investment.remainingPendingAmount === undefined
-        ? Math.max(totalPayable - totalPaidBefore, 0)
-        : Number(investment.remainingPendingAmount);
-
-    if (pendingBefore <= 0) {
-      return res.status(400).json({ success: false, message: "This investment is already fully paid" });
-    }
-
-    if (amountPaid > pendingBefore) {
-      return res.status(400).json({
-        success: false,
-        message: `payAmount cannot be greater than pending amount (${pendingBefore})`,
-      });
-    }
-
-    const totalPaidAfter = totalPaidBefore + amountPaid;
-    const pendingAfter = Math.max(pendingBefore - amountPaid, 0);
-
-    // ✅ create payment record (history)
-    const payment = await CustomerPayment.create({
-      customerId: customer._id,
-      investmentId: investment._id,
-      assetId: investment.assetId,
-
-      paymentType: String(paymentType).toLowerCase(), // ✅
-
-      paidAmount: amountPaid,
-
-      investmentAmount: investment.investmentAmount,
-      interestRate: investment.investmentInterestRate,
-      interestAmount,
-      totalPayable,
-
-      totalPaidBefore,
-      totalPaidAfter,
-
-      pendingBefore,
-      pendingAfter,
-
-      note: note ? String(note).trim() : "",
-      paidAt: new Date(),
-    });
-
-    // ✅ update investment summary fields
-    investment.totalPaidAmount = totalPaidAfter;
-    investment.remainingPendingAmount = pendingAfter;
-    investment.lastPaymentAmount = amountPaid;
-    investment.lastPaymentDate = payment.paidAt;
-    await investment.save();
-
-    return res.status(201).json({
-      success: true,
-      message: "Payment recorded successfully",
-      data: {
-        payment,
-        investmentSummary: {
-          investmentId: investment._id,
-          totalPayable,
-          totalPaidAmount: investment.totalPaidAmount,
-          totalPendingPayment: investment.remainingPendingAmount,
-          lastPaymentAmount: investment.lastPaymentAmount,
-          lastPaymentDate: investment.lastPaymentDate,
-        },
-      },
-    });
-  } catch (err) {
-    console.error("createCustomerPayment error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
+const monthlyInterest = (principal, ratePercent) => {
+  const p = safeNum(principal, 0);
+  const r = safeNum(ratePercent, 0);
+  return Math.max((p * r) / 100, 0);
 };
 
 /**
- * ✅ GET Full Investment Payment Report (summary + history)
- * GET /api/customer/payments/investment/:investmentId/full
+ * ✅ Full months elapsed between startDate and now.
+ * - startDate 2026-01-02
+ * - now 2026-02-01 => 0 months (NOT arrears yet)
+ * - now 2026-02-02 => 1 month (arrears begins)
  */
-export const getInvestmentFullPaymentReport = async (req, res) => {
-  try {
-    const { investmentId } = req.params;
+const fullMonthsElapsed = (startDate, now = new Date()) => {
+  if (!startDate) return 0;
+  const s = new Date(startDate);
+  if (Number.isNaN(s.getTime())) return 0;
 
-    if (!mongoose.Types.ObjectId.isValid(investmentId)) {
-      return res.status(400).json({ success: false, message: "Invalid investmentId" });
-    }
+  let months =
+    (now.getFullYear() - s.getFullYear()) * 12 + (now.getMonth() - s.getMonth());
 
-    const investment = await Investment.findById(investmentId)
-      .populate("customerId", "nic name tpNumber city address")
-      .populate("assetId", "assetName assetType vehicleNumber landAddress estimateAmount")
-      .lean();
+  if (now.getDate() < s.getDate()) months -= 1;
 
-    if (!investment) return res.status(404).json({ success: false, message: "Investment not found" });
+  return Math.max(months, 0);
+};
 
-    const interestAmount = calcInterestAmount(
-      investment.investmentAmount,
-      investment.investmentInterestRate
-    );
-    const totalPayable = calcTotalPayable(
-      investment.investmentAmount,
-      investment.investmentInterestRate
-    );
+const calcInvestmentNumbers = (inv, now) => {
+  const principal = safeNum(inv.investmentAmount, 0);
+  const rate = safeNum(inv.investmentInterestRate, 0);
 
-    const monthlyInterestAmount = calcMonthlyInterest(
-      interestAmount,
-      investment.investmentDurationMonths
-    );
-    const monthlyTotalWithInvestment = calcMonthlyTotal(
-      totalPayable,
-      investment.investmentDurationMonths
-    );
+  const monthInt = monthlyInterest(principal, rate);
+  const dueMonths = fullMonthsElapsed(inv.startDate, now);
 
-    const totalPaidAmount = Number(investment.totalPaidAmount || 0);
+  // arrears interest is only past FULL months:
+  const pastDueInterest = monthInt * dueMonths;
 
-    const totalPendingPayment =
-      investment.remainingPendingAmount === null || investment.remainingPendingAmount === undefined
-        ? Math.max(totalPayable - totalPaidAmount, 0)
-        : Number(investment.remainingPendingAmount);
+  const interestPaid = safeNum(inv.interestPaidAmount, 0);
+  const arrearsInterest = Math.max(pastDueInterest - interestPaid, 0);
 
-    const history = await CustomerPayment.find({ investmentId })
-      .sort({ paidAt: -1 })
-      .lean();
+  // principal pending (keep your logic)
+  const principalPaid = safeNum(inv.principalPaidAmount, 0);
+  const principalPending =
+    inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
+      ? Math.max(principal - principalPaid, 0)
+      : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
 
-    const lastPaymentAmount = investment.lastPaymentAmount || (history[0]?.paidAmount ?? 0);
-    const lastPaymentDate = investment.lastPaymentDate || (history[0]?.paidAt ?? null);
+  // arrears months count (only if arrears exists)
+  const arrearsMonthsCount =
+    arrearsInterest > 0 && monthInt > 0 ? Math.ceil(arrearsInterest / monthInt) : 0;
 
-    return res.status(200).json({
-      success: true,
-      data: {
-        investmentId: investment._id,
-        assetId: investment.assetId?._id || investment.assetId,
-        customerId: investment.customerId?._id || investment.customerId,
+  // status per investment
+  let status = "pending";
+  if (principalPending <= 0 && arrearsInterest <= 0) status = "complete";
+  else if (arrearsInterest > 0) status = "arrears";
+  else status = "pending";
 
-        investmentDate: investment.createdAt,
-
-        investamount: investment.investmentAmount,
-        interetrate: investment.investmentInterestRate,
-
-        interestamount: interestAmount,
-        totalinvestmentwithintrestamount: totalPayable,
-
-        monthyintesetamount: monthlyInterestAmount,
-        monthlyintesetwithinvset: monthlyTotalWithInvestment,
-
-        lastpyamtnt: lastPaymentAmount,
-        lastpamentdate: lastPaymentDate,
-
-        totalpayamount: totalPaidAmount,
-        totalpendingpayment: totalPendingPayment,
-
-        customer: investment.customerId,
-        asset: investment.assetId,
-
-        paymentHistory: history.map((p) => ({
-          paymentId: p._id,
-          paidAmount: p.paidAmount,
-          paymentType: p.paymentType, // ✅ include
-          paidAt: p.paidAt,
-          note: p.note || "",
-          pendingBefore: p.pendingBefore,
-          pendingAfter: p.pendingAfter,
-          totalPaidAfter: p.totalPaidAfter,
-        })),
-      },
-    });
-  } catch (err) {
-    console.error("getInvestmentFullPaymentReport error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
+  return {
+    principal,
+    rate,
+    monthlyInterest: monthInt,
+    dueMonths,
+    pastDueInterest,
+    interestPaidAmount: interestPaid,
+    arrearsInterest,
+    principalPending,
+    arrearsMonthsCount,
+    status,
+  };
 };
 
 /**
- * ✅ GET Full report by Customer NIC + AssetId
- * GET /api/customer/payments/customer/:nic/asset/:assetId/full
+ * ✅ helper: sum customer paid money (CustomerPayment.paidAmount)
  */
-export const getCustomerAssetFullPaymentReport = async (req, res) => {
+const getCustomerTotalPaidMap = async (customerIds) => {
+  const agg = await CustomerPayment.aggregate([
+    { $match: { customerId: { $in: customerIds } } },
+    { $group: { _id: "$customerId", totalCustomerPay: { $sum: "$paidAmount" } } },
+  ]);
+
+  const map = new Map();
+  for (const x of agg) map.set(String(x._id), safeNum(x.totalCustomerPay, 0));
+  return map;
+};
+
+/**
+ * ✅ GET Customer Flow (table)
+ * GET /api/customer/payments/customer/flow
+ *
+ * TABLE REQUIRED:
+ *  nic, name, tpNumber,
+ *  totalCustomerPay (customer paid money until now),
+ *  arrearsAmount, arrearsMonthsCount,
+ *  status
+ */
+export const getCustomerFlow = async (req, res) => {
   try {
-    const { nic, assetId } = req.params;
+    const now = new Date();
 
-    if (!isValidSriLankaNIC(nic)) {
-      return res.status(400).json({ success: false, message: "Invalid NIC format" });
-    }
-    if (!mongoose.Types.ObjectId.isValid(assetId)) {
-      return res.status(400).json({ success: false, message: "Invalid assetId" });
-    }
-
-    const normalizedNic = String(nic).trim().toUpperCase();
-    const customer = await Customer.findOne({ nic: normalizedNic }).lean();
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
-    const asset = await Asset.findById(assetId).lean();
-    if (!asset) return res.status(404).json({ success: false, message: "Asset not found" });
-
-    if (asset.customerId && String(asset.customerId) !== String(customer._id)) {
-      return res.status(400).json({ success: false, message: "This asset does not belong to this customer" });
-    }
-
-    const investments = await Investment.find({ customerId: customer._id, assetId: asset._id })
+    const customers = await Customer.find()
+      .select("_id nic name tpNumber")
       .sort({ createdAt: -1 })
       .lean();
 
-    const data = [];
-    for (const inv of investments) {
-      const interestAmount = calcInterestAmount(inv.investmentAmount, inv.investmentInterestRate);
-      const totalPayable = calcTotalPayable(inv.investmentAmount, inv.investmentInterestRate);
-      const monthlyInterestAmount = calcMonthlyInterest(interestAmount, inv.investmentDurationMonths);
-      const monthlyTotalWithInvestment = calcMonthlyTotal(totalPayable, inv.investmentDurationMonths);
-
-      const totalPaidAmount = Number(inv.totalPaidAmount || 0);
-      const totalPendingPayment =
-        inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
-          ? Math.max(totalPayable - totalPaidAmount, 0)
-          : Number(inv.remainingPendingAmount);
-
-      const history = await CustomerPayment.find({ investmentId: inv._id }).sort({ paidAt: -1 }).lean();
-
-      data.push({
-        investmentId: inv._id,
-        investmentDate: inv.createdAt,
-        investamount: inv.investmentAmount,
-        interetrate: inv.investmentInterestRate,
-        interestamount: interestAmount,
-        totalinvestmentwithintrestamount: totalPayable,
-        monthyintesetamount: monthlyInterestAmount,
-        monthlyintesetwithinvset: monthlyTotalWithInvestment,
-        lastpyamtnt: inv.lastPaymentAmount || (history[0]?.paidAmount ?? 0),
-        lastpamentdate: inv.lastPaymentDate || (history[0]?.paidAt ?? null),
-        totalpayamount: totalPaidAmount,
-        totalpendingpayment: totalPendingPayment,
-        paymentHistory: history.map((p) => ({
-          ...p,
-          paymentType: p.paymentType || "cash",
-        })),
-      });
+    if (!customers.length) {
+      return res.status(200).json({ success: true, count: 0, data: [] });
     }
 
-    return res.status(200).json({
-      success: true,
-      customer,
-      asset,
-      data,
-    });
-  } catch (err) {
-    console.error("getCustomerAssetFullPaymentReport error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
-  }
-};
-
-/* =======================================================================
-   ✅ ADDED BELOW (NO CHANGES ABOVE)
-   ======================================================================= */
-
-/**
- * ✅ CUSTOMER FLOW LIST (ALL CUSTOMERS)
- * GET /api/customer/payments/customer/flow
- */
-export const getCustomerFlowList = async (req, res) => {
-  try {
-    const arrearsDays = Number(req.query?.arrearsDays || 30);
-    const thresholdMs = arrearsDays * 24 * 60 * 60 * 1000;
-    const now = Date.now();
-
-    const customers = await Customer.find().sort({ createdAt: -1 }).lean();
     const customerIds = customers.map((c) => c._id);
+
+    // ✅ sum total customer paid (until now)
+    const totalPaidMap = await getCustomerTotalPaidMap(customerIds);
 
     const investments = await Investment.find({ customerId: { $in: customerIds } })
       .select(
-        "customerId investmentAmount investmentInterestRate totalPaidAmount remainingPendingAmount lastPaymentDate"
+        "_id customerId brokerId assetIds investmentName investmentAmount investmentInterestRate startDate interestPaidAmount principalPaidAmount remainingPendingAmount description createdAt"
       )
       .lean();
 
-    const byCustomer = new Map();
+    const invByCustomer = new Map();
     for (const inv of investments) {
-      const k = String(inv.customerId);
-      if (!byCustomer.has(k)) byCustomer.set(k, []);
-      byCustomer.get(k).push(inv);
+      const key = String(inv.customerId);
+      if (!invByCustomer.has(key)) invByCustomer.set(key, []);
+      invByCustomer.get(key).push(inv);
     }
 
     const rows = customers.map((c) => {
-      const invs = byCustomer.get(String(c._id)) || [];
+      const invs = invByCustomer.get(String(c._id)) || [];
 
-      let totalInvestment = 0;
-      let fullPayMoney = 0;
-      let pendingMoney = 0;
-      let arrearsMoney = 0;
+      let arrearsAmount = 0;
+      let arrearsMonthsCount = 0;
+
+      let anyArrears = false;
+      let anyPending = false;
+
+      let minDate = null;
+      let maxDate = null;
 
       for (const inv of invs) {
-        const investAmount = Number(inv.investmentAmount || 0);
-        const totalPayable = calcTotalPayable(investAmount, Number(inv.investmentInterestRate || 0));
+        const calc = calcInvestmentNumbers(inv, now);
 
-        const totalPaid = Number(inv.totalPaidAmount || 0);
+        arrearsAmount += calc.arrearsInterest;
+        arrearsMonthsCount += calc.arrearsMonthsCount;
 
-        const pending =
-          inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
-            ? Math.max(totalPayable - totalPaid, 0)
-            : Number(inv.remainingPendingAmount || 0);
+        if (calc.status === "arrears") anyArrears = true;
+        if (calc.status === "pending") anyPending = true;
 
-        totalInvestment += investAmount;
-        fullPayMoney += totalPayable;
-        pendingMoney += pending;
-
-        const last = inv.lastPaymentDate ? new Date(inv.lastPaymentDate).getTime() : null;
-        const isArrears = pending > 0 && (!last || now - last > thresholdMs);
-
-        if (isArrears) arrearsMoney += pending;
+        const dt = inv.startDate ? new Date(inv.startDate) : null;
+        if (dt && !Number.isNaN(dt.getTime())) {
+          if (!minDate || dt < minDate) minDate = dt;
+          if (!maxDate || dt > maxDate) maxDate = dt;
+        }
       }
 
-      const status = arrearsMoney > 0 ? "arrears" : pendingMoney > 0 ? "pending" : "finished";
+      let status = "pending";
+      if (invs.length === 0) status = "complete";
+      else if (anyArrears) status = "arrears";
+      else if (anyPending) status = "pending";
+      else status = "complete";
+
+      const totalCustomerPay = totalPaidMap.get(String(c._id)) || 0;
 
       return {
-        _id: c._id,
-        nic: c.nic,
-        name: c.name,
-        totalInvestment: Number(totalInvestment.toFixed(2)),
-        fullPayMoney: Number(fullPayMoney.toFixed(2)),
-        pendingMoney: Number(pendingMoney.toFixed(2)),
-        arrearsMoney: Number(arrearsMoney.toFixed(2)),
+        customerId: c._id,
+        nic: c.nic || "",
+        name: c.name || "",
+        tpNumber: c.tpNumber || "",
+
+        // ✅ customer paid money until now
+        totalCustomerPay: Number(totalCustomerPay.toFixed(2)),
+
+        arrearsAmount: Number(arrearsAmount.toFixed(2)),
+        arrearsMonthsCount: Number(arrearsMonthsCount),
         status,
+        dateRange: { from: minDate, to: maxDate },
       };
     });
 
-    return res.status(200).json({ success: true, arrearsDays, data: rows });
+    return res.status(200).json({
+      success: true,
+      count: rows.length,
+      data: rows,
+      meaning: {
+        totalCustomerPay: "Sum of CustomerPayment.paidAmount for this customer (paid until now)",
+      },
+      rule: {
+        arrears: "arrearsInterest > 0 (only after full months elapsed)",
+        pending: "no arrears but principalPending > 0",
+        complete: "principalPending = 0 AND arrearsInterest = 0",
+      },
+    });
   } catch (err) {
-    console.error("getCustomerFlowList error:", err);
+    console.error("getCustomerFlow error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 /**
- * ✅ CUSTOMER FLOW DETAILS (BY NIC)
+ * ✅ GET Customer Flow Detail (modal)
  * GET /api/customer/payments/customer/:nic/flow
+ *
+ * DETAILS:
+ *  - totals.totalCustomerPay (paid until now)
+ *  - totals.arrearsAmount, totals.arrearsMonthsCount, totals.status
+ *  - arrearsInvestments (only investments where arrearsInterest > 0)
  */
 export const getCustomerFlowByNic = async (req, res) => {
   try {
@@ -427,80 +236,369 @@ export const getCustomerFlowByNic = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid NIC format" });
     }
 
-    const arrearsDays = Number(req.query?.arrearsDays || 30);
-    const thresholdMs = arrearsDays * 24 * 60 * 60 * 1000;
-    const now = Date.now();
+    const customer = await Customer.findOne({ nic: String(nic).trim().toUpperCase() })
+      .select("_id nic name tpNumber")
+      .lean();
 
-    const normalizedNic = String(nic).trim().toUpperCase();
-    const customer = await Customer.findOne({ nic: normalizedNic }).lean();
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+    if (!customer) {
+      return res.status(404).json({ success: false, message: "Customer not found for this NIC" });
+    }
 
-    const investments = await Investment.find({ customerId: customer._id })
-      .select(
-        "investmentAmount investmentInterestRate totalPaidAmount remainingPendingAmount lastPaymentDate"
+    // ✅ total customer paid until now
+    const payAgg = await CustomerPayment.aggregate([
+      { $match: { customerId: customer._id } },
+      { $group: { _id: "$customerId", totalCustomerPay: { $sum: "$paidAmount" } } },
+    ]);
+    const totalCustomerPay = safeNum(payAgg?.[0]?.totalCustomerPay, 0);
+
+    const now = new Date();
+
+    const invs = await Investment.find({ customerId: customer._id })
+      .populate("brokerId", "nic name")
+      .populate(
+        "assetIds",
+        "assetName assetType vehicleNumber landAddress estimateAmount assetDescription isReleased"
       )
       .sort({ createdAt: -1 })
       .lean();
 
-    let totalInvestment = 0;
-    let fullPayMoney = 0;
-    let pendingMoney = 0;
-    let arrearsMoney = 0;
+    let arrearsAmount = 0;
+    let arrearsMonthsCount = 0;
 
-    for (const inv of investments) {
-      const investAmount = Number(inv.investmentAmount || 0);
-      const totalPayable = calcTotalPayable(investAmount, Number(inv.investmentInterestRate || 0));
+    let anyArrears = false;
+    let anyPending = false;
 
-      const totalPaid = Number(inv.totalPaidAmount || 0);
+    let minDate = null;
+    let maxDate = null;
 
-      const pending =
-        inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
-          ? Math.max(totalPayable - totalPaid, 0)
-          : Number(inv.remainingPendingAmount || 0);
+    const arrearsInvestments = [];
 
-      totalInvestment += investAmount;
-      fullPayMoney += totalPayable;
-      pendingMoney += pending;
+    for (const inv of invs) {
+      const calc = calcInvestmentNumbers(inv, now);
 
-      const last = inv.lastPaymentDate ? new Date(inv.lastPaymentDate).getTime() : null;
-      const isArrears = pending > 0 && (!last || now - last > thresholdMs);
+      arrearsAmount += calc.arrearsInterest;
+      arrearsMonthsCount += calc.arrearsMonthsCount;
 
-      if (isArrears) arrearsMoney += pending;
+      if (calc.status === "arrears") anyArrears = true;
+      if (calc.status === "pending") anyPending = true;
+
+      const dt = inv.startDate ? new Date(inv.startDate) : null;
+      if (dt && !Number.isNaN(dt.getTime())) {
+        if (!minDate || dt < minDate) minDate = dt;
+        if (!maxDate || dt > maxDate) maxDate = dt;
+      }
+
+      if (calc.arrearsInterest > 0) {
+        arrearsInvestments.push({
+          _id: inv._id,
+          investmentName: inv.investmentName,
+          investmentAmount: calc.principal,
+          investmentInterestRate: calc.rate,
+          monthlyInterest: calc.monthlyInterest,
+          startDate: inv.startDate,
+          dueMonths: calc.dueMonths,
+
+          interestPaidAmount: calc.interestPaidAmount,
+          arrearsInterest: calc.arrearsInterest,
+          principalPending: calc.principalPending,
+
+          description: inv.description || "",
+          broker: inv.brokerId || null,
+          assets: Array.isArray(inv.assetIds) ? inv.assetIds : [],
+        });
+      }
     }
 
-    const payments = await CustomerPayment.find({ customerId: customer._id })
-      .select("paidAmount paidAt")
-      .sort({ paidAt: 1 })
-      .lean();
-
-    const totalCustomerPayMoney = payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
-
-    const fromDate = payments.length ? payments[0].paidAt : null;
-    const toDate = payments.length ? payments[payments.length - 1].paidAt : null;
-
-    const status = arrearsMoney > 0 ? "arrears" : pendingMoney > 0 ? "pending" : "finished";
+    let status = "pending";
+    if (invs.length === 0) status = "complete";
+    else if (anyArrears) status = "arrears";
+    else if (anyPending) status = "pending";
+    else status = "complete";
 
     return res.status(200).json({
       success: true,
-      arrearsDays,
       data: {
-        customer: { _id: customer._id, nic: customer.nic, name: customer.name },
+        customer,
         totals: {
-          totalInvestment: Number(totalInvestment.toFixed(2)),
-          fullPayMoney: Number(fullPayMoney.toFixed(2)),
-          pendingMoney: Number(pendingMoney.toFixed(2)),
-          arrearsMoney: Number(arrearsMoney.toFixed(2)),
-          totalCustomerPayMoney: Number(totalCustomerPayMoney.toFixed(2)),
+          // ✅ customer paid until now
+          totalCustomerPay: Number(totalCustomerPay.toFixed(2)),
+
+          arrearsAmount: Number(arrearsAmount.toFixed(2)),
+          arrearsMonthsCount: Number(arrearsMonthsCount),
           status,
         },
-        dateRange: {
-          from: fromDate,
-          to: toDate,
-        },
+        dateRange: { from: minDate, to: maxDate },
+        arrearsInvestments,
       },
     });
   } catch (err) {
     console.error("getCustomerFlowByNic error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+/* ===========================
+   ✅ EXISTING: getCustomerInvestmentsByNic + createCustomerPayment
+   (KEEP your existing logic below — unchanged)
+   =========================== */
+
+export const getCustomerInvestmentsByNic = async (req, res) => {
+  try {
+    const { nic } = req.params;
+    const brokerId = String(req.query.brokerId || "").trim();
+
+    if (!isValidSriLankaNIC(nic)) {
+      return res.status(400).json({ success: false, message: "Invalid NIC format" });
+    }
+    if (!brokerId) {
+      return res.status(400).json({ success: false, message: "brokerId is required" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(brokerId)) {
+      return res.status(400).json({ success: false, message: "Invalid brokerId" });
+    }
+
+    const customer = await Customer.findOne({ nic: String(nic).trim().toUpperCase() }).lean();
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    const now = new Date();
+
+    const invs = await Investment.find({ customerId: customer._id, brokerId })
+      .populate("customerId", "nic name")
+      .populate("brokerId", "nic name")
+      .populate("assetIds", "assetName assetType vehicleNumber landAddress estimateAmount isReleased")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const data = invs.map((inv) => {
+      const principal = safeNum(inv.investmentAmount, 0);
+      const rate = safeNum(inv.investmentInterestRate, 0);
+
+      const monthInt = monthlyInterest(principal, rate);
+      const months = fullMonthsElapsed(inv.startDate, now);
+
+      const pastDue = monthInt * months;
+
+      const interestPaid = safeNum(inv.interestPaidAmount, 0);
+      const arrearsInterest = Math.max(pastDue - interestPaid, 0);
+
+      const principalPaid = safeNum(inv.principalPaidAmount, 0);
+      const principalPending =
+        inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
+          ? Math.max(principal - principalPaid, 0)
+          : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
+
+      return {
+        _id: inv._id,
+        investmentName: inv.investmentName,
+        startDate: inv.startDate,
+
+        customer: inv.customerId,
+        broker: inv.brokerId,
+        assets: inv.assetIds || [],
+
+        investmentAmount: principal,
+        thisMonthInterest: monthInt,
+        dueMonths: months,
+        totalInterestPastDue: pastDue,
+        interestPaidToNow: interestPaid,
+
+        arrearsInterest,
+        principalPaid,
+        principalPending,
+
+        lastPaymentAmount: safeNum(inv.lastPaymentAmount, 0),
+        lastPaymentDate: inv.lastPaymentDate || null,
+      };
+    });
+
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    console.error("getCustomerInvestmentsByNic error:", err);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+export const createCustomerPayment = async (req, res) => {
+  try {
+    const { customerNic, brokerId, investmentId, payAmount, paymentType, payFor, note } =
+      req.body || {};
+
+    if (!customerNic || !brokerId || !investmentId || payAmount === undefined || !paymentType) {
+      return res.status(400).json({
+        success: false,
+        message: "customerNic, brokerId, investmentId, payAmount, paymentType are required",
+      });
+    }
+
+    if (!isValidSriLankaNIC(customerNic)) {
+      return res.status(400).json({ success: false, message: "Invalid customerNic format" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(brokerId)) {
+      return res.status(400).json({ success: false, message: "Invalid brokerId" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(investmentId)) {
+      return res.status(400).json({ success: false, message: "Invalid investmentId" });
+    }
+
+    const method = String(paymentType).toLowerCase();
+    if (!["cash", "check"].includes(method)) {
+      return res.status(400).json({ success: false, message: "paymentType must be cash or check" });
+    }
+
+    const payForMode = String(payFor || "interest").toLowerCase();
+    if (!["interest", "principal", "interest+principal"].includes(payForMode)) {
+      return res.status(400).json({
+        success: false,
+        message: "payFor must be interest, principal, or interest+principal",
+      });
+    }
+
+    const amountPaid = Number(payAmount);
+    if (!Number.isFinite(amountPaid) || amountPaid <= 0) {
+      return res.status(400).json({ success: false, message: "payAmount must be > 0" });
+    }
+
+    const customer = await Customer.findOne({ nic: String(customerNic).trim().toUpperCase() });
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    const broker = await Broker.findById(brokerId).lean();
+    if (!broker) return res.status(404).json({ success: false, message: "Broker not found" });
+
+    const inv = await Investment.findById(investmentId);
+    if (!inv) return res.status(404).json({ success: false, message: "Investment not found" });
+
+    if (String(inv.customerId) !== String(customer._id)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Investment does not belong to this customer" });
+    }
+    if (String(inv.brokerId) !== String(brokerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "This investment does not belong to selected broker",
+      });
+    }
+
+    const assetIds = Array.isArray(inv.assetIds) ? inv.assetIds : [];
+    if (assetIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "This investment has no assetIds. Fix investment data.",
+      });
+    }
+
+    const now = new Date();
+
+    const principal = safeNum(inv.investmentAmount, 0);
+    const rate = safeNum(inv.investmentInterestRate, 0);
+
+    const monthInt = monthlyInterest(principal, rate);
+    const dueMonths = fullMonthsElapsed(inv.startDate, now);
+    const pastDueInterest = monthInt * dueMonths;
+
+    const interestPaidBefore = safeNum(inv.interestPaidAmount, 0);
+
+    const interestOutstandingForPayment = Math.max(
+      pastDueInterest + monthInt - interestPaidBefore,
+      0
+    );
+
+    const principalPaidBefore = safeNum(inv.principalPaidAmount, 0);
+    const principalPendingBefore =
+      inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
+        ? Math.max(principal - principalPaidBefore, 0)
+        : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
+
+    let remaining = amountPaid;
+    let interestPart = 0;
+    let principalPart = 0;
+
+    if (payForMode === "interest") {
+      interestPart = Math.min(interestOutstandingForPayment, remaining);
+      remaining -= interestPart;
+    } else if (payForMode === "principal") {
+      principalPart = Math.min(principalPendingBefore, remaining);
+      remaining -= principalPart;
+    } else {
+      interestPart = Math.min(interestOutstandingForPayment, remaining);
+      remaining -= interestPart;
+
+      principalPart = Math.min(principalPendingBefore, remaining);
+      remaining -= principalPart;
+    }
+
+    const excessAmount = Math.max(remaining, 0);
+
+    const totalInterestPaidAfter = interestPaidBefore + interestPart;
+    const totalPrincipalPaidAfter = principalPaidBefore + principalPart;
+
+    const principalPendingAfter = Math.max(principalPendingBefore - principalPart, 0);
+    const isPrincipalFullyPaidAfter = principalPendingAfter <= 0;
+
+    const payment = await CustomerPayment.create({
+      customerId: customer._id,
+      brokerId: inv.brokerId,
+      investmentId: inv._id,
+      assetIds,
+
+      paymentType: method,
+      payFor: payForMode,
+      paidAmount: amountPaid,
+
+      interestPart,
+      principalPart,
+      excessAmount,
+
+      totalInterestPaidAfter,
+      totalPrincipalPaidAfter,
+      isPrincipalFullyPaidAfter,
+
+      note: note ? String(note).trim() : "",
+      paidAt: now,
+    });
+
+    inv.interestPaidAmount = totalInterestPaidAfter;
+    inv.principalPaidAmount = totalPrincipalPaidAfter;
+    inv.totalPaidAmount = safeNum(inv.totalPaidAmount, 0) + amountPaid;
+    inv.remainingPendingAmount = principalPendingAfter;
+    inv.lastPaymentAmount = amountPaid;
+    inv.lastPaymentDate = payment.paidAt;
+
+    await inv.save();
+
+    const arrearsAfter = Math.max(pastDueInterest - inv.interestPaidAmount, 0);
+    const isSettled = principalPendingAfter <= 0 && arrearsAfter <= 0;
+
+    if (isSettled) {
+      await Asset.updateMany(
+        { _id: { $in: assetIds } },
+        { $set: { isReleased: true, releasedAt: now, releaseNote: "Released after full settlement" } }
+      );
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: excessAmount > 0 ? "Payment saved (excess recorded)" : "Payment saved",
+      data: {
+        payment,
+        summary: {
+          investmentId: inv._id,
+          thisMonthInterest: monthInt,
+          dueMonths,
+          totalInterestPastDue: pastDueInterest,
+          arrearsInterest: arrearsAfter,
+          interestPaidAmount: inv.interestPaidAmount,
+          principalPaidAmount: inv.principalPaidAmount,
+          principalPendingAmount: inv.remainingPendingAmount,
+          isPrincipalFullyPaid: isPrincipalFullyPaidAfter,
+          isSettled,
+          assetReleased: isSettled,
+          excessAmount,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("createCustomerPayment error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };

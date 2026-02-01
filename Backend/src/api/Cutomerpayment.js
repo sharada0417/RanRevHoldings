@@ -1,23 +1,19 @@
 import express from "express";
 import {
   createCustomerPayment,
-  getInvestmentFullPaymentReport,
-  getCustomerAssetFullPaymentReport,
-
-  // ✅ added (flow)
-  getCustomerFlowList,
+  getCustomerInvestmentsByNic,
+  getCustomerFlow,
   getCustomerFlowByNic,
 } from "../application/Cutomerpayment.js";
 
 const paymentRouter = express.Router();
 
-// ✅ added (flow)
-paymentRouter.get("/customer/flow", getCustomerFlowList);
+// ✅ customer flow
+paymentRouter.get("/customer/flow", getCustomerFlow);
 paymentRouter.get("/customer/:nic/flow", getCustomerFlowByNic);
 
 // ✅ existing
+paymentRouter.get("/customer/:nic/investments", getCustomerInvestmentsByNic);
 paymentRouter.post("/pay", createCustomerPayment);
-paymentRouter.get("/investment/:investmentId/full", getInvestmentFullPaymentReport);
-paymentRouter.get("/customer/:nic/asset/:assetId/full", getCustomerAssetFullPaymentReport);
 
 export default paymentRouter;

@@ -1,4 +1,3 @@
-// application/dashboard.js
 import Investment from "../infastructure/schemas/investement.js";
 import CustomerPayment from "../infastructure/schemas/Cutomerpayment.js";
 import BrokerPayment from "../infastructure/schemas/brokerpayment.js";
@@ -42,7 +41,7 @@ const buildLabels = ({ granularity, year, month }) => {
 
 // ✅ group key by ANY date field (createdAt / paidAt)
 const groupKeyBy = (granularity, fieldPath) => {
-  const f = fieldPath; // e.g. "$createdAt" or "$paidAt"
+  const f = fieldPath;
   if (granularity === "day") return { y: { $year: f }, m: { $month: f }, d: { $dayOfMonth: f } };
   if (granularity === "month") return { y: { $year: f }, m: { $month: f } };
   return { y: { $year: f } };
@@ -65,57 +64,38 @@ export const getDashboardSummary = async (req, res) => {
     const { start, end } = getRange({ year, month, granularity });
     const labels = buildLabels({ granularity, year, month });
 
-    // ✅ INVESTMENTS (by createdAt)
+    /* =========================================================
+       ✅ 1) TOTAL INVESTMENT (FULL Investment Amount)
+       ========================================================= */
     const invAgg = await Investment.aggregate([
       { $match: { createdAt: { $gte: start, $lt: end } } },
       {
-        $project: {
-          createdAt: 1,
-          investmentAmount: { $ifNull: ["$investmentAmount", 0] },
-          investmentInterestRate: { $ifNull: ["$investmentInterestRate", 0] },
-          brokerCommissionRate: { $ifNull: ["$brokerCommissionRate", 0] },
-          interestAmount: {
-            $multiply: [
-              { $ifNull: ["$investmentAmount", 0] },
-              { $divide: [{ $ifNull: ["$investmentInterestRate", 0] }, 100] },
-            ],
-          },
-        },
-      },
-      {
-        $addFields: {
-          brokerCommissionTotal: {
-            $multiply: [
-              "$interestAmount",
-              { $divide: [{ $ifNull: ["$brokerCommissionRate", 0] }, 100] },
-            ],
-          },
-        },
-      },
-      { $addFields: { theoreticalProfit: { $subtract: ["$interestAmount", "$brokerCommissionTotal"] } } },
-      {
         $group: {
           _id: groupKeyBy(granularity, "$createdAt"),
-          totalInvestment: { $sum: "$investmentAmount" },
-          totalInterest: { $sum: "$interestAmount" },
-          totalBrokerCommission: { $sum: "$brokerCommissionTotal" },
-          totalTheoreticalProfit: { $sum: "$theoreticalProfit" },
+          totalInvestment: { $sum: { $ifNull: ["$investmentAmount", 0] } },
         },
       },
     ]);
 
-    // ✅ CUSTOMER PAYMENTS RECEIVED (by paidAt)
+    /* =========================================================
+       ✅ 2) CUSTOMER PAYMENTS (Money In)
+          customerPay = FULL paidAmount (principal + interest)
+          customerInterest = ONLY interestPart (for profit)
+       ========================================================= */
     const customerPayAgg = await CustomerPayment.aggregate([
       { $match: { paidAt: { $gte: start, $lt: end } } },
       {
         $group: {
           _id: groupKeyBy(granularity, "$paidAt"),
           totalCustomerPay: { $sum: { $ifNull: ["$paidAmount", 0] } },
+          totalCustomerInterest: { $sum: { $ifNull: ["$interestPart", 0] } },
         },
       },
     ]);
 
-    // ✅ BROKER PAYMENTS PAID (by paidAt)
+    /* =========================================================
+       ✅ 3) BROKER PAYMENTS (Commission We Paid)
+       ========================================================= */
     const brokerPayAgg = await BrokerPayment.aggregate([
       { $match: { paidAt: { $gte: start, $lt: end } } },
       {
@@ -126,19 +106,18 @@ export const getDashboardSummary = async (req, res) => {
       },
     ]);
 
-    // ✅ series (what frontend charts read)
+    /* =========================================================
+       ✅ SERIES (what frontend reads)
+       ========================================================= */
     const series = {
       investment: Array(labels.length).fill(0),
 
-      // calculated (optional, still kept)
-      brokerCommission: Array(labels.length).fill(0),
-      theoreticalProfit: Array(labels.length).fill(0),
+      customerPay: Array(labels.length).fill(0),        // FULL customer paid
+      customerInterest: Array(labels.length).fill(0),   // ONLY interest received
 
-      // money flow (IMPORTANT)
-      customerPay: Array(labels.length).fill(0), // money in
-      brokerPay: Array(labels.length).fill(0),   // money out
+      brokerPay: Array(labels.length).fill(0),          // broker commission paid
 
-      // ✅ REAL PROFIT (money in - money out)
+      // ✅ REAL PROFIT = customerInterest - brokerPay
       realProfit: Array(labels.length).fill(0),
     };
 
@@ -146,68 +125,101 @@ export const getDashboardSummary = async (req, res) => {
       const idx = indexFromGroup({ granularity, year, _id: row._id });
       if (idx >= 0 && idx < labels.length) {
         series.investment[idx] = Number(row.totalInvestment || 0);
-        series.brokerCommission[idx] = Number(row.totalBrokerCommission || 0);
-        series.theoreticalProfit[idx] = Number(row.totalTheoreticalProfit || 0);
       }
     }
 
     for (const row of customerPayAgg) {
       const idx = indexFromGroup({ granularity, year, _id: row._id });
-      if (idx >= 0 && idx < labels.length) series.customerPay[idx] = Number(row.totalCustomerPay || 0);
+      if (idx >= 0 && idx < labels.length) {
+        series.customerPay[idx] = Number(row.totalCustomerPay || 0);
+        series.customerInterest[idx] = Number(row.totalCustomerInterest || 0);
+      }
     }
 
     for (const row of brokerPayAgg) {
       const idx = indexFromGroup({ granularity, year, _id: row._id });
-      if (idx >= 0 && idx < labels.length) series.brokerPay[idx] = Number(row.totalBrokerPay || 0);
+      if (idx >= 0 && idx < labels.length) {
+        series.brokerPay[idx] = Number(row.totalBrokerPay || 0);
+      }
     }
 
-    // ✅ compute realProfit AFTER filling both payment series
+    // ✅ REAL PROFIT per bucket
     for (let i = 0; i < labels.length; i++) {
-      series.realProfit[i] = Number(series.customerPay[i] || 0) - Number(series.brokerPay[i] || 0);
+      series.realProfit[i] =
+        Number(series.customerInterest[i] || 0) - Number(series.brokerPay[i] || 0);
     }
 
+    /* =========================================================
+       ✅ TOTALS (cards)
+       ========================================================= */
     const totals = {
       totalInvestment: series.investment.reduce((a, b) => a + b, 0),
 
-      // calculated (optional)
-      totalBrokerCommission: series.brokerCommission.reduce((a, b) => a + b, 0),
-      totalTheoreticalProfit: series.theoreticalProfit.reduce((a, b) => a + b, 0),
-
-      // money flow
-      totalCustomerPay: series.customerPay.reduce((a, b) => a + b, 0),
+      // total broker commission paid
       totalBrokerPay: series.brokerPay.reduce((a, b) => a + b, 0),
+
+      // optional totals (not required but useful)
+      totalCustomerPay: series.customerPay.reduce((a, b) => a + b, 0), // full paid
+      totalCustomerInterest: series.customerInterest.reduce((a, b) => a + b, 0), // interest only
 
       // ✅ REAL PROFIT TOTAL
       totalRealProfit: series.realProfit.reduce((a, b) => a + b, 0),
     };
 
-    // ✅ Monthly Review (always for selected month/year)
+    /* =========================================================
+       ✅ Monthly Review (selected month/year)
+          - Broker Pay = we pay brokers commission in month
+          - Customer Pay = full customer pay in month (principal+interest)
+          - Real Profit = customer interest - broker commission (month)
+       ========================================================= */
     const monthStart = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
     const monthEnd = new Date(Date.UTC(year, month, 1, 0, 0, 0));
 
     const [monthlyInv] = await Investment.aggregate([
       { $match: { createdAt: { $gte: monthStart, $lt: monthEnd } } },
-      { $group: { _id: null, totalInvestmentThisMonth: { $sum: { $ifNull: ["$investmentAmount", 0] } } } },
+      {
+        $group: {
+          _id: null,
+          totalInvestmentThisMonth: { $sum: { $ifNull: ["$investmentAmount", 0] } },
+        },
+      },
     ]);
 
     const [monthlyCustomerPay] = await CustomerPayment.aggregate([
       { $match: { paidAt: { $gte: monthStart, $lt: monthEnd } } },
-      { $group: { _id: null, totalCustomerPayThisMonth: { $sum: { $ifNull: ["$paidAmount", 0] } } } },
+      {
+        $group: {
+          _id: null,
+          totalCustomerPayThisMonth: { $sum: { $ifNull: ["$paidAmount", 0] } },
+          totalCustomerInterestThisMonth: { $sum: { $ifNull: ["$interestPart", 0] } },
+        },
+      },
     ]);
 
     const [monthlyBrokerPay] = await BrokerPayment.aggregate([
       { $match: { paidAt: { $gte: monthStart, $lt: monthEnd } } },
-      { $group: { _id: null, totalBrokerPayThisMonth: { $sum: { $ifNull: ["$paidAmount", 0] } } } },
+      {
+        $group: {
+          _id: null,
+          totalBrokerPayThisMonth: { $sum: { $ifNull: ["$paidAmount", 0] } },
+        },
+      },
     ]);
 
     const customerPayThisMonth = Number(monthlyCustomerPay?.totalCustomerPayThisMonth || 0);
+    const customerInterestThisMonth = Number(monthlyCustomerPay?.totalCustomerInterestThisMonth || 0);
     const brokerPayThisMonth = Number(monthlyBrokerPay?.totalBrokerPayThisMonth || 0);
 
     const review = {
       monthLabel: monthNamesShort[month - 1],
-      customerPayThisMonth,
-      brokerPayThisMonth,
-      realProfitThisMonth: customerPayThisMonth - brokerPayThisMonth,
+
+      // ✅ meanings you asked
+      customerPayThisMonth,          // FULL customer paid (principal + interest)
+      brokerPayThisMonth,            // broker commission paid
+      realProfitThisMonth: customerInterestThisMonth - brokerPayThisMonth,
+
+      // extra (helps UI if needed)
+      customerInterestThisMonth,
       investmentThisMonth: Number(monthlyInv?.totalInvestmentThisMonth || 0),
     };
 
@@ -219,10 +231,10 @@ export const getDashboardSummary = async (req, res) => {
       totals,
       monthlyReview: review,
       note: {
-        flow: "Customers pay you (CustomerPayment.paidAt). You pay brokers (BrokerPayment.paidAt).",
-        realProfitFormula: "realProfit = customerPay - brokerPay",
-        theoreticalProfitFormula:
-          "theoreticalProfit = (investmentAmount*(investmentInterestRate/100)) - ((investmentAmount*(investmentInterestRate/100))*(brokerCommissionRate/100))",
+        totalInvestment: "Sum of Investment.investmentAmount",
+        brokerPay: "Sum of BrokerPayment.paidAmount",
+        customerPay: "Sum of CustomerPayment.paidAmount (principal+interest)",
+        realProfit: "Sum of CustomerPayment.interestPart - Sum of BrokerPayment.paidAmount",
       },
     });
   } catch (err) {

@@ -10,10 +10,7 @@ import {
 
 const brokerRouter = express.Router();
 
-brokerRouter
-  .route("/")
-  .get(getAllBrokers)
-  .post(createBroker);
+brokerRouter.route("/").get(getAllBrokers).post(createBroker);
 
 // ✅ IMPORTANT: /search before /:id
 brokerRouter.get("/search", searchBrokers);

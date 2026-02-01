@@ -1,15 +1,13 @@
-// application/cutomerReport.js
 import mongoose from "mongoose";
 import Investment from "../infastructure/schemas/investement.js";
 import Customer from "../infastructure/schemas/customer.js";
 
 /**
- * ✅ Correct Formula (percent-based):
  * pending = investmentAmount + (investmentAmount * (investmentInterestRate / 100))
  * monthly = pending / 12
  */
 
-// ✅ Single customer report by customerId
+// ✅ GET /api/reports/customer/:customerId
 export const getCustomerInvestmentReport = async (req, res) => {
   try {
     const { customerId } = req.params;
@@ -26,29 +24,20 @@ export const getCustomerInvestmentReport = async (req, res) => {
     const pipeline = [
       { $match: { customerId: new mongoose.Types.ObjectId(customerId) } },
 
-      // ✅ pending = investmentAmount + investmentAmount*(rate/100)
       {
         $addFields: {
           customerPendlingpayment: {
             $add: [
               "$investmentAmount",
               {
-                $multiply: [
-                  "$investmentAmount",
-                  { $divide: ["$investmentInterestRate", 100] },
-                ],
+                $multiply: ["$investmentAmount", { $divide: ["$investmentInterestRate", 100] }],
               },
             ],
           },
         },
       },
 
-      // ✅ monthly = pending / 12
-      {
-        $addFields: {
-          monthlyPaymentAmount: { $divide: ["$customerPendlingpayment", 12] },
-        },
-      },
+      { $addFields: { monthlyPaymentAmount: { $divide: ["$customerPendlingpayment", 12] } } },
 
       {
         $facet: {
@@ -71,13 +60,16 @@ export const getCustomerInvestmentReport = async (req, res) => {
                 _id: 1,
                 customerId: 1,
                 brokerId: 1,
-                assetId: 1,
+                assetIds: 1,
+
+                investmentName: 1,
                 investmentAmount: 1,
                 investmentInterestRate: 1,
-                investmentDurationMonths: 1,
+                brokerCommissionRate: 1,
+
                 customerPendlingpayment: 1,
                 monthlyPaymentAmount: 1,
-                brokerCommissionRate: 1,
+
                 description: 1,
                 createdAt: 1,
               },
@@ -104,7 +96,7 @@ export const getCustomerInvestmentReport = async (req, res) => {
       formulaUsed: {
         pending: "investmentAmount + (investmentAmount * (investmentInterestRate/100))",
         monthly: "pending / 12",
-        example: "10000 + 10000*(2.5/100) = 10250; monthly = 10250/12 = 854.17",
+        example: "100000 + 100000*(10/100) = 110000; monthly = 110000/12 = 9166.67",
       },
     });
   } catch (err) {
@@ -113,7 +105,7 @@ export const getCustomerInvestmentReport = async (req, res) => {
   }
 };
 
-// ✅ Single customer report by NIC
+// ✅ GET /api/reports/customer-nic/:nic
 export const getCustomerInvestmentReportByNic = async (req, res) => {
   try {
     const { nic } = req.params;
@@ -132,113 +124,113 @@ export const getCustomerInvestmentReportByNic = async (req, res) => {
   }
 };
 
-// ✅ ALL customers report (summary)
+// ✅ GET /api/reports?page=1&limit=20&q=...
 export const getAllInvestmentReports = async (req, res) => {
   try {
-    const { q = "", page = 1, limit = 20 } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+    const page = Math.max(Number(req.query.page || 1), 1);
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 200);
+    const q = String(req.query.q || "").trim();
 
-    const matchCustomer =
-      q.trim().length > 0
-        ? {
-            $or: [
-              { nic: { $regex: q, $options: "i" } },
-              { name: { $regex: q, $options: "i" } },
-              { tpNumber: { $regex: q, $options: "i" } },
-            ],
-          }
-        : {};
+    const matchCustomer = q
+      ? {
+          $or: [
+            { nic: { $regex: q, $options: "i" } },
+            { name: { $regex: q, $options: "i" } },
+            { city: { $regex: q, $options: "i" } },
+            { address: { $regex: q, $options: "i" } },
+            { tpNumber: { $regex: q, $options: "i" } },
+          ],
+        }
+      : {};
 
-    const pipeline = [
-      { $match: matchCustomer },
+    // 1) Find matching customers (paged)
+    const [customers, totalCustomers] = await Promise.all([
+      Customer.find(matchCustomer)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      Customer.countDocuments(matchCustomer),
+    ]);
 
-      // Join investments
-      {
-        $lookup: {
-          from: "investments", // must match actual collection name
-          localField: "_id",
-          foreignField: "customerId",
-          as: "investments",
-        },
-      },
+    if (!customers.length) {
+      return res.status(200).json({
+        success: true,
+        page,
+        limit,
+        totalCustomers,
+        totalPages: Math.ceil(totalCustomers / limit),
+        data: [],
+      });
+    }
 
-      { $unwind: { path: "$investments", preserveNullAndEmptyArrays: true } },
+    const customerIds = customers.map((c) => c._id);
 
-      // safe values
+    // 2) Aggregate investments totals by customerId (only for current page customers)
+    const invAgg = await Investment.aggregate([
+      { $match: { customerId: { $in: customerIds } } },
+
       {
         $addFields: {
-          invAmount: { $ifNull: ["$investments.investmentAmount", 0] },
-          invRate: { $ifNull: ["$investments.investmentInterestRate", 0] },
-        },
-      },
-
-      // ✅ invPending = amount + amount*(rate/100)
-      {
-        $addFields: {
-          invPending: {
+          customerPendlingpayment: {
             $add: [
-              "$invAmount",
-              { $multiply: ["$invAmount", { $divide: ["$invRate", 100] }] },
+              "$investmentAmount",
+              {
+                $multiply: ["$investmentAmount", { $divide: ["$investmentInterestRate", 100] }],
+              },
             ],
           },
         },
       },
+      { $addFields: { monthlyPaymentAmount: { $divide: ["$customerPendlingpayment", 12] } } },
 
-      // ✅ invMonthly = invPending/12
-      { $addFields: { invMonthly: { $divide: ["$invPending", 12] } } },
-
-      // group per customer
       {
         $group: {
-          _id: "$_id",
-          customer: { $first: "$$ROOT" },
-          totalInvestmentAmount: { $sum: "$invAmount" },
-          totalCustomerPendlingpayment: { $sum: "$invPending" },
-          totalMonthlyPaymentAmount: { $sum: "$invMonthly" },
-          investmentsCount: {
-            $sum: { $cond: [{ $gt: ["$invAmount", 0] }, 1, 0] },
-          },
+          _id: "$customerId",
+          totalInvestmentAmount: { $sum: "$investmentAmount" },
+          totalCustomerPendlingpayment: { $sum: "$customerPendlingpayment" },
+          totalMonthlyPaymentAmount: { $sum: "$monthlyPaymentAmount" },
+          investmentsCount: { $sum: 1 },
         },
       },
+    ]);
 
-      {
-        $project: {
-          _id: 0,
-          customerId: "$_id",
-          customer: {
-            nic: "$customer.nic",
-            name: "$customer.name",
-            tpNumber: "$customer.tpNumber",
-            city: "$customer.city",
-            address: "$customer.address",
-            createdAt: "$customer.createdAt",
-          },
-          totalInvestmentAmount: 1,
-          totalCustomerPendlingpayment: 1,
-          totalMonthlyPaymentAmount: 1,
-          investmentsCount: 1,
+    const map = new Map(invAgg.map((x) => [String(x._id), x]));
+
+    // 3) Merge
+    const data = customers.map((c) => {
+      const t = map.get(String(c._id)) || {
+        totalInvestmentAmount: 0,
+        totalCustomerPendlingpayment: 0,
+        totalMonthlyPaymentAmount: 0,
+        investmentsCount: 0,
+      };
+
+      return {
+        customer: {
+          _id: c._id,
+          nic: c.nic,
+          name: c.name,
+          address: c.address,
+          city: c.city,
+          tpNumber: c.tpNumber,
         },
-      },
-
-      { $sort: { totalInvestmentAmount: -1 } },
-
-      {
-        $facet: {
-          meta: [{ $count: "total" }],
-          data: [{ $skip: skip }, { $limit: Number(limit) }],
+        totals: {
+          totalInvestmentAmount: Number(t.totalInvestmentAmount || 0),
+          totalCustomerPendlingpayment: Number(t.totalCustomerPendlingpayment || 0),
+          totalMonthlyPaymentAmount: Number(t.totalMonthlyPaymentAmount || 0),
+          investmentsCount: Number(t.investmentsCount || 0),
         },
-      },
-    ];
-
-    const result = await Customer.aggregate(pipeline);
-    const total = result?.[0]?.meta?.[0]?.total || 0;
+      };
+    });
 
     return res.status(200).json({
       success: true,
-      page: Number(page),
-      limit: Number(limit),
-      total,
-      data: result?.[0]?.data || [],
+      page,
+      limit,
+      totalCustomers,
+      totalPages: Math.ceil(totalCustomers / limit),
+      data,
       formulaUsed: {
         pending: "investmentAmount + (investmentAmount * (investmentInterestRate/100))",
         monthly: "pending / 12",

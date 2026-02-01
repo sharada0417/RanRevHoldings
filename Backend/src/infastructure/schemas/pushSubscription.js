@@ -7,7 +7,6 @@ const PushSubscriptionSchema = new mongoose.Schema(
       p256dh: { type: String, required: true },
       auth: { type: String, required: true },
     },
-    // optional: later you can attach to userId
     platform: { type: String, default: "web" },
   },
   { timestamps: true }

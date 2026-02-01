@@ -1,14 +1,15 @@
 import express from "express";
 import {
-  getBrokerPaymentSummaryByNic,
-  createBrokerPayment,
-  getBrokerPaymentHistoryByNic,
+  getBrokerSummaryByNic,
+  createBrokerSimplePayment,
 } from "../application/brokerpayment.js";
 
-const brokerPaymentRouter = express.Router();
+const brokerpaymentRouter = express.Router();
 
-brokerPaymentRouter.get("/broker/:nic/summary", getBrokerPaymentSummaryByNic);
-brokerPaymentRouter.post("/pay", createBrokerPayment);
-brokerPaymentRouter.get("/broker/:nic/history", getBrokerPaymentHistoryByNic);
+// ✅ summary
+brokerpaymentRouter.get("/broker/:nic/summary", getBrokerSummaryByNic);
 
-export default brokerPaymentRouter;
+// ✅ simple pay
+brokerpaymentRouter.post("/pay", createBrokerSimplePayment);
+
+export default brokerpaymentRouter;
