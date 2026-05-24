@@ -58,7 +58,10 @@ export default function BrokerPaymantPage() {
   }, [selectedBrokerNic, loadSummary]);
 
   const brokerObj = summaryRes?.broker || null;
-  const pending = Number(summaryRes?.totalPendingCommission || 0);
+
+  // ✅ FIXED: was summaryRes?.totalPendingCommission (doesn't exist)
+  // Backend returns: { totals: { totalEarned, totalPaid, pending } }
+  const pending = Number(summaryRes?.totals?.pending || 0);
 
   const handleBrokerChange = (brokerNic) => {
     const b = brokers.find(
