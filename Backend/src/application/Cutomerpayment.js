@@ -5,12 +5,6 @@ import Asset from "../infastructure/schemas/asset.js";
 import Investment from "../infastructure/schemas/investement.js";
 import CustomerPayment from "../infastructure/schemas/Cutomerpayment.js";
 
-/**
- * NIC formats supported:
- *  - 12 digits
- *  - 11 digits + V/X
- *  - 9 digits + V/X
- */
 const isValidSriLankaNIC = (nicRaw) => {
   const nic = String(nicRaw || "").trim();
   const re12 = /^\d{12}$/;
@@ -24,6 +18,9 @@ const safeNum = (v, d = 0) => {
   return Number.isFinite(n) ? n : d;
 };
 
+/**
+ * ✅ CORE: monthly interest = principal * (rate / 100)
+ */
 const monthlyInterest = (principal, ratePercent) => {
   const p = safeNum(principal, 0);
   const r = safeNum(ratePercent, 0);
@@ -31,71 +28,109 @@ const monthlyInterest = (principal, ratePercent) => {
 };
 
 /**
- * ✅ Full months elapsed between startDate and now.
- * - startDate 2026-01-02
- * - now 2026-02-01 => 0 months (NOT arrears yet)
- * - now 2026-02-02 => 1 month (arrears begins)
+ * ✅ CORE CYCLE RULE:
+ *
+ * startDate = calculationStartDate (when interest starts accruing).
+ * Every calendar month from startDate, one interest payment is due.
+ *
+ * completedCycles = number of due dates that have already PASSED.
+ * (due date = startDate + N months, where due date < now)
+ *
+ * Example:
+ *   startDate = 2025-06-10, now = 2026-03-05
+ *   due dates: 2025-07-10 ✓, 2025-08-10 ✓, ... 2026-02-10 ✓  → 8 cycles
+ *   next due:  2026-03-10 (not past yet → not arrears for that cycle)
+ *
+ *   startDate = 2025-05-24, now = 2025-06-20
+ *   2025-06-24 not passed yet → 0 cycles → no arrears
+ *
+ *   startDate = 2025-05-24, now = 2025-06-25
+ *   2025-06-24 passed → 1 cycle → 1 interest due
  */
-const fullMonthsElapsed = (startDate, now = new Date()) => {
+const completedCycles = (startDate, now = new Date()) => {
   if (!startDate) return 0;
   const s = new Date(startDate);
   if (Number.isNaN(s.getTime())) return 0;
 
-  let months =
-    (now.getFullYear() - s.getFullYear()) * 12 + (now.getMonth() - s.getMonth());
+  let count = 0;
+  const due = new Date(s);
+  due.setMonth(due.getMonth() + 1);
 
-  if (now.getDate() < s.getDate()) months -= 1;
+  while (due < now) {
+    count++;
+    due.setMonth(due.getMonth() + 1);
+  }
 
-  return Math.max(months, 0);
+  return count;
 };
 
-const calcInvestmentNumbers = (inv, now) => {
+/**
+ * Returns the next due date (first upcoming due date >= now)
+ */
+const nextDueDate = (startDate, now = new Date()) => {
+  if (!startDate) return null;
+  const s = new Date(startDate);
+  if (Number.isNaN(s.getTime())) return null;
+
+  const due = new Date(s);
+  due.setMonth(due.getMonth() + 1);
+
+  while (due < now) {
+    due.setMonth(due.getMonth() + 1);
+  }
+
+  return due;
+};
+
+/**
+ * Full investment calculation numbers based on 30-day cycle rule
+ */
+const calcInvestmentNumbers = (inv, now = new Date()) => {
   const principal = safeNum(inv.investmentAmount, 0);
   const rate = safeNum(inv.investmentInterestRate, 0);
 
   const monthInt = monthlyInterest(principal, rate);
-  const dueMonths = fullMonthsElapsed(inv.startDate, now);
+  const cycles = completedCycles(inv.startDate, now);
 
-  // arrears interest is only past FULL months:
-  const pastDueInterest = monthInt * dueMonths;
+  // Total interest that SHOULD have been paid by now (all past due dates)
+  const totalDueInterest = monthInt * cycles;
 
   const interestPaid = safeNum(inv.interestPaidAmount, 0);
-  const arrearsInterest = Math.max(pastDueInterest - interestPaid, 0);
 
-  // principal pending (keep your logic)
+  // Arrears = unpaid interest from past due cycles only
+  const arrearsInterest = Math.max(totalDueInterest - interestPaid, 0);
+
   const principalPaid = safeNum(inv.principalPaidAmount, 0);
   const principalPending =
     inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
       ? Math.max(principal - principalPaid, 0)
       : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
 
-  // arrears months count (only if arrears exists)
   const arrearsMonthsCount =
     arrearsInterest > 0 && monthInt > 0 ? Math.ceil(arrearsInterest / monthInt) : 0;
 
-  // status per investment
   let status = "pending";
   if (principalPending <= 0 && arrearsInterest <= 0) status = "complete";
   else if (arrearsInterest > 0) status = "arrears";
   else status = "pending";
 
+  const next = nextDueDate(inv.startDate, now);
+
   return {
     principal,
     rate,
     monthlyInterest: monthInt,
-    dueMonths,
-    pastDueInterest,
+    cycles,
+    totalDueInterest,
     interestPaidAmount: interestPaid,
     arrearsInterest,
     principalPending,
     arrearsMonthsCount,
+    nextDueDate: next,
     status,
   };
 };
 
-/**
- * ✅ helper: sum customer paid money (CustomerPayment.paidAmount)
- */
 const getCustomerTotalPaidMap = async (customerIds) => {
   const agg = await CustomerPayment.aggregate([
     { $match: { customerId: { $in: customerIds } } },
@@ -110,12 +145,6 @@ const getCustomerTotalPaidMap = async (customerIds) => {
 /**
  * ✅ GET Customer Flow (table)
  * GET /api/customer/payments/customer/flow
- *
- * TABLE REQUIRED:
- *  nic, name, tpNumber,
- *  totalCustomerPay (customer paid money until now),
- *  arrearsAmount, arrearsMonthsCount,
- *  status
  */
 export const getCustomerFlow = async (req, res) => {
   try {
@@ -132,7 +161,6 @@ export const getCustomerFlow = async (req, res) => {
 
     const customerIds = customers.map((c) => c._id);
 
-    // ✅ sum total customer paid (until now)
     const totalPaidMap = await getCustomerTotalPaidMap(customerIds);
 
     const investments = await Investment.find({ customerId: { $in: customerIds } })
@@ -153,12 +181,11 @@ export const getCustomerFlow = async (req, res) => {
 
       let arrearsAmount = 0;
       let arrearsMonthsCount = 0;
-
       let anyArrears = false;
       let anyPending = false;
-
       let minDate = null;
       let maxDate = null;
+      let nextDue = null;
 
       for (const inv of invs) {
         const calc = calcInvestmentNumbers(inv, now);
@@ -173,6 +200,11 @@ export const getCustomerFlow = async (req, res) => {
         if (dt && !Number.isNaN(dt.getTime())) {
           if (!minDate || dt < minDate) minDate = dt;
           if (!maxDate || dt > maxDate) maxDate = dt;
+        }
+
+        // earliest upcoming due date
+        if (calc.nextDueDate) {
+          if (!nextDue || calc.nextDueDate < nextDue) nextDue = calc.nextDueDate;
         }
       }
 
@@ -189,12 +221,10 @@ export const getCustomerFlow = async (req, res) => {
         nic: c.nic || "",
         name: c.name || "",
         tpNumber: c.tpNumber || "",
-
-        // ✅ customer paid money until now
         totalCustomerPay: Number(totalCustomerPay.toFixed(2)),
-
         arrearsAmount: Number(arrearsAmount.toFixed(2)),
-        arrearsMonthsCount: Number(arrearsMonthsCount),
+        arrearsMonthsCount,
+        nextDueDate: nextDue,
         status,
         dateRange: { from: minDate, to: maxDate },
       };
@@ -204,12 +234,13 @@ export const getCustomerFlow = async (req, res) => {
       success: true,
       count: rows.length,
       data: rows,
-      meaning: {
-        totalCustomerPay: "Sum of CustomerPayment.paidAmount for this customer (paid until now)",
-      },
       rule: {
-        arrears: "arrearsInterest > 0 (only after full months elapsed)",
-        pending: "no arrears but principalPending > 0",
+        cycle:
+          "Interest is due every calendar month from startDate (calculationStartDate). " +
+          "completedCycles = count of due dates already past. " +
+          "arrearsInterest = (monthlyInterest × completedCycles) − interestPaid",
+        arrears: "arrearsInterest > 0 (customer missed one or more past due cycles)",
+        pending: "no arrears but principal not fully paid",
         complete: "principalPending = 0 AND arrearsInterest = 0",
       },
     });
@@ -222,11 +253,6 @@ export const getCustomerFlow = async (req, res) => {
 /**
  * ✅ GET Customer Flow Detail (modal)
  * GET /api/customer/payments/customer/:nic/flow
- *
- * DETAILS:
- *  - totals.totalCustomerPay (paid until now)
- *  - totals.arrearsAmount, totals.arrearsMonthsCount, totals.status
- *  - arrearsInvestments (only investments where arrearsInterest > 0)
  */
 export const getCustomerFlowByNic = async (req, res) => {
   try {
@@ -244,7 +270,6 @@ export const getCustomerFlowByNic = async (req, res) => {
       return res.status(404).json({ success: false, message: "Customer not found for this NIC" });
     }
 
-    // ✅ total customer paid until now
     const payAgg = await CustomerPayment.aggregate([
       { $match: { customerId: customer._id } },
       { $group: { _id: "$customerId", totalCustomerPay: { $sum: "$paidAmount" } } },
@@ -264,13 +289,10 @@ export const getCustomerFlowByNic = async (req, res) => {
 
     let arrearsAmount = 0;
     let arrearsMonthsCount = 0;
-
     let anyArrears = false;
     let anyPending = false;
-
     let minDate = null;
     let maxDate = null;
-
     const arrearsInvestments = [];
 
     for (const inv of invs) {
@@ -296,12 +318,13 @@ export const getCustomerFlowByNic = async (req, res) => {
           investmentInterestRate: calc.rate,
           monthlyInterest: calc.monthlyInterest,
           startDate: inv.startDate,
-          dueMonths: calc.dueMonths,
-
+          cycles: calc.cycles,
+          totalDueInterest: Number(calc.totalDueInterest.toFixed(2)),
           interestPaidAmount: calc.interestPaidAmount,
-          arrearsInterest: calc.arrearsInterest,
-          principalPending: calc.principalPending,
-
+          arrearsInterest: Number(calc.arrearsInterest.toFixed(2)),
+          arrearsMonthsCount: calc.arrearsMonthsCount,
+          principalPending: Number(calc.principalPending.toFixed(2)),
+          nextDueDate: calc.nextDueDate,
           description: inv.description || "",
           broker: inv.brokerId || null,
           assets: Array.isArray(inv.assetIds) ? inv.assetIds : [],
@@ -320,11 +343,9 @@ export const getCustomerFlowByNic = async (req, res) => {
       data: {
         customer,
         totals: {
-          // ✅ customer paid until now
           totalCustomerPay: Number(totalCustomerPay.toFixed(2)),
-
           arrearsAmount: Number(arrearsAmount.toFixed(2)),
-          arrearsMonthsCount: Number(arrearsMonthsCount),
+          arrearsMonthsCount,
           status,
         },
         dateRange: { from: minDate, to: maxDate },
@@ -337,11 +358,10 @@ export const getCustomerFlowByNic = async (req, res) => {
   }
 };
 
-/* ===========================
-   ✅ EXISTING: getCustomerInvestmentsByNic + createCustomerPayment
-   (KEEP your existing logic below — unchanged)
-   =========================== */
-
+/**
+ * ✅ GET Investments for a customer+broker (for payment form)
+ * GET /api/customer/payments/customer/:nic/investments?brokerId=xxx
+ */
 export const getCustomerInvestmentsByNic = async (req, res) => {
   try {
     const { nic } = req.params;
@@ -370,22 +390,7 @@ export const getCustomerInvestmentsByNic = async (req, res) => {
       .lean();
 
     const data = invs.map((inv) => {
-      const principal = safeNum(inv.investmentAmount, 0);
-      const rate = safeNum(inv.investmentInterestRate, 0);
-
-      const monthInt = monthlyInterest(principal, rate);
-      const months = fullMonthsElapsed(inv.startDate, now);
-
-      const pastDue = monthInt * months;
-
-      const interestPaid = safeNum(inv.interestPaidAmount, 0);
-      const arrearsInterest = Math.max(pastDue - interestPaid, 0);
-
-      const principalPaid = safeNum(inv.principalPaidAmount, 0);
-      const principalPending =
-        inv.remainingPendingAmount === null || inv.remainingPendingAmount === undefined
-          ? Math.max(principal - principalPaid, 0)
-          : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
+      const calc = calcInvestmentNumbers(inv, now);
 
       return {
         _id: inv._id,
@@ -396,15 +401,19 @@ export const getCustomerInvestmentsByNic = async (req, res) => {
         broker: inv.brokerId,
         assets: inv.assetIds || [],
 
-        investmentAmount: principal,
-        thisMonthInterest: monthInt,
-        dueMonths: months,
-        totalInterestPastDue: pastDue,
-        interestPaidToNow: interestPaid,
+        investmentAmount: calc.principal,
+        monthlyInterest: Number(calc.monthlyInterest.toFixed(2)),
+        completedCycles: calc.cycles,
+        totalDueInterest: Number(calc.totalDueInterest.toFixed(2)),
+        interestPaidToNow: Number(calc.interestPaidAmount.toFixed(2)),
 
-        arrearsInterest,
-        principalPaid,
-        principalPending,
+        arrearsInterest: Number(calc.arrearsInterest.toFixed(2)),
+        arrearsMonthsCount: calc.arrearsMonthsCount,
+
+        principalPaid: Number(safeNum(inv.principalPaidAmount, 0).toFixed(2)),
+        principalPending: Number(calc.principalPending.toFixed(2)),
+
+        nextDueDate: calc.nextDueDate,
 
         lastPaymentAmount: safeNum(inv.lastPaymentAmount, 0),
         lastPaymentDate: inv.lastPaymentDate || null,
@@ -418,6 +427,17 @@ export const getCustomerInvestmentsByNic = async (req, res) => {
   }
 };
 
+/**
+ * ✅ CREATE Customer Payment
+ * POST /api/customer/payments/pay
+ *
+ * Body: { customerNic, brokerId, investmentId, payAmount, paymentType, payFor, note }
+ *
+ * payFor: "interest" | "principal" | "interest+principal"
+ *
+ * Interest outstanding = (monthlyInterest × completedCycles) − interestPaid
+ *   (only cycles whose due date has already passed)
+ */
 export const createCustomerPayment = async (req, res) => {
   try {
     const { customerNic, brokerId, investmentId, payAmount, paymentType, payFor, note } =
@@ -468,40 +488,36 @@ export const createCustomerPayment = async (req, res) => {
     if (!inv) return res.status(404).json({ success: false, message: "Investment not found" });
 
     if (String(inv.customerId) !== String(customer._id)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Investment does not belong to this customer" });
+      return res.status(400).json({ success: false, message: "Investment does not belong to this customer" });
     }
     if (String(inv.brokerId) !== String(brokerId)) {
-      return res.status(400).json({
-        success: false,
-        message: "This investment does not belong to selected broker",
-      });
+      return res.status(400).json({ success: false, message: "Investment does not belong to selected broker" });
     }
 
     const assetIds = Array.isArray(inv.assetIds) ? inv.assetIds : [];
     if (assetIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "This investment has no assetIds. Fix investment data.",
-      });
+      return res.status(400).json({ success: false, message: "This investment has no assetIds." });
     }
 
     const now = new Date();
 
+    // ✅ Calculate using 30-day cycle rule
     const principal = safeNum(inv.investmentAmount, 0);
     const rate = safeNum(inv.investmentInterestRate, 0);
-
     const monthInt = monthlyInterest(principal, rate);
-    const dueMonths = fullMonthsElapsed(inv.startDate, now);
-    const pastDueInterest = monthInt * dueMonths;
+    const cycles = completedCycles(inv.startDate, now);
 
+    // Total interest owed from all past due cycles
+    const totalDueInterest = monthInt * cycles;
     const interestPaidBefore = safeNum(inv.interestPaidAmount, 0);
 
-    const interestOutstandingForPayment = Math.max(
-      pastDueInterest + monthInt - interestPaidBefore,
-      0
-    );
+    // Arrears-only interest (past due cycles not yet paid)
+    const arrearsInterestBeforePayment = Math.max(totalDueInterest - interestPaidBefore, 0);
+
+    // Outstanding interest the customer can pay now:
+    // = arrears from past cycles + current month's interest (next upcoming cycle)
+    // We allow paying up to: arrearsInterest + 1 month forward
+    const interestOutstanding = Math.max(totalDueInterest + monthInt - interestPaidBefore, 0);
 
     const principalPaidBefore = safeNum(inv.principalPaidAmount, 0);
     const principalPendingBefore =
@@ -514,13 +530,14 @@ export const createCustomerPayment = async (req, res) => {
     let principalPart = 0;
 
     if (payForMode === "interest") {
-      interestPart = Math.min(interestOutstandingForPayment, remaining);
+      interestPart = Math.min(interestOutstanding, remaining);
       remaining -= interestPart;
     } else if (payForMode === "principal") {
       principalPart = Math.min(principalPendingBefore, remaining);
       remaining -= principalPart;
     } else {
-      interestPart = Math.min(interestOutstandingForPayment, remaining);
+      // interest+principal: clear interest first, then principal
+      interestPart = Math.min(interestOutstanding, remaining);
       remaining -= interestPart;
 
       principalPart = Math.min(principalPendingBefore, remaining);
@@ -566,7 +583,8 @@ export const createCustomerPayment = async (req, res) => {
 
     await inv.save();
 
-    const arrearsAfter = Math.max(pastDueInterest - inv.interestPaidAmount, 0);
+    // Check if fully settled (no arrears, no principal pending)
+    const arrearsAfter = Math.max(totalDueInterest - inv.interestPaidAmount, 0);
     const isSettled = principalPendingAfter <= 0 && arrearsAfter <= 0;
 
     if (isSettled) {
@@ -576,6 +594,9 @@ export const createCustomerPayment = async (req, res) => {
       );
     }
 
+    // Next due date after payment
+    const nextDue = nextDueDate(inv.startDate, now);
+
     return res.status(201).json({
       success: true,
       message: excessAmount > 0 ? "Payment saved (excess recorded)" : "Payment saved",
@@ -583,10 +604,12 @@ export const createCustomerPayment = async (req, res) => {
         payment,
         summary: {
           investmentId: inv._id,
-          thisMonthInterest: monthInt,
-          dueMonths,
-          totalInterestPastDue: pastDueInterest,
-          arrearsInterest: arrearsAfter,
+          calculationStartDate: inv.startDate,
+          monthlyInterest: Number(monthInt.toFixed(2)),
+          completedCycles: cycles,
+          totalDueInterest: Number(totalDueInterest.toFixed(2)),
+          arrearsInterestBeforePayment: Number(arrearsInterestBeforePayment.toFixed(2)),
+          arrearsInterestAfterPayment: Number(arrearsAfter.toFixed(2)),
           interestPaidAmount: inv.interestPaidAmount,
           principalPaidAmount: inv.principalPaidAmount,
           principalPendingAmount: inv.remainingPendingAmount,
@@ -594,6 +617,7 @@ export const createCustomerPayment = async (req, res) => {
           isSettled,
           assetReleased: isSettled,
           excessAmount,
+          nextDueDate: nextDue,
         },
       },
     });
