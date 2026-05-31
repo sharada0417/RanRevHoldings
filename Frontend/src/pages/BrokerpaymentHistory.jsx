@@ -1,3 +1,7 @@
+// src/pages/BrokerPaymantHistory.jsx
+// No logic changes — updated field name totalBrokerEarned (was totalBrokerPayable)
+// to match the new backend response field name.
+
 import React, { useMemo, useState } from "react";
 import { useGetBrokerPayHistoryQuery } from "../api/brokerPayHistoryApi";
 
@@ -16,9 +20,12 @@ export default function BrokerPaymantHistory() {
     searchText.trim()
   );
 
-  const rows = useMemo(() => (Array.isArray(data?.data) ? data.data : []), [data]);
+  const rows = useMemo(
+    () => (Array.isArray(data?.data) ? data.data : []),
+    [data]
+  );
 
-  // optional local filter
+  // local filter (backend already filters but this is instant)
   const filtered = useMemo(() => {
     const s = searchText.trim().toLowerCase();
     if (!s) return rows;
@@ -61,12 +68,6 @@ export default function BrokerPaymantHistory() {
           className="relative max-h-[75vh] overflow-y-auto space-y-3 pr-1"
           style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
         >
-          <style>{`
-            .hide-scrollbar::-webkit-scrollbar { display: none; }
-          `}</style>
-
-          <div className="hide-scrollbar" />
-
           {isLoading ? (
             <div className="text-center text-gray-500 py-10">Loading...</div>
           ) : error ? (
@@ -88,7 +89,8 @@ export default function BrokerPaymantHistory() {
                       {safe(r.brokerName)} ({safe(r.brokerNic)})
                     </div>
                     <div className="text-xs text-gray-500">
-                      Month Range: <span className="font-semibold">{safe(r.monthRange)}</span>
+                      Month Range:{" "}
+                      <span className="font-semibold">{safe(r.monthRange)}</span>
                     </div>
                   </div>
 
@@ -105,7 +107,7 @@ export default function BrokerPaymantHistory() {
                   </div>
 
                   <div>
-                    <div className="text-gray-500 text-xs">Payment Date & Time</div>
+                    <div className="text-gray-500 text-xs">Payment Date &amp; Time</div>
                     <div className="font-semibold">{safe(r.brokerPaidDateTime)}</div>
                   </div>
 
@@ -121,12 +123,29 @@ export default function BrokerPaymantHistory() {
                       {money(r.brokerPendingPayment)}
                     </div>
                   </div>
+
+                  {/* ✅ Show total earned for transparency */}
+                  <div>
+                    <div className="text-gray-500 text-xs">Total Earned (this broker)</div>
+                    <div className="font-semibold text-gray-800">
+                      {money(r.totalBrokerEarned)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-gray-500 text-xs">Total Paid (this broker)</div>
+                    <div className="font-semibold text-gray-800">
+                      {money(r.totalBrokerPaid)}
+                    </div>
+                  </div>
                 </div>
 
-                {/* OPTIONAL customers list */}
+                {/* customers list */}
                 {Array.isArray(r.customers) && r.customers.length > 0 ? (
                   <div className="mt-3 text-sm text-gray-700 bg-gray-50 rounded-xl p-2">
-                    <div className="text-xs text-gray-500 mb-1">Customers in this payment:</div>
+                    <div className="text-xs text-gray-500 mb-1">
+                      Customers in this payment:
+                    </div>
                     <div className="space-y-1">
                       {r.customers.map((c, idx) => (
                         <div key={idx} className="text-xs">
@@ -139,7 +158,8 @@ export default function BrokerPaymantHistory() {
 
                 {r.note ? (
                   <div className="mt-3 text-sm text-gray-700 bg-gray-50 rounded-xl p-2">
-                    <span className="text-xs text-gray-500">Note:</span> {safe(r.note)}
+                    <span className="text-xs text-gray-500">Note:</span>{" "}
+                    {safe(r.note)}
                   </div>
                 ) : null}
               </div>
@@ -148,7 +168,9 @@ export default function BrokerPaymantHistory() {
         </div>
 
         <div className="mt-2 text-[11px] text-gray-500 text-center">
-          {isFetching ? "Updating..." : `Total Records: ${filtered.length}`}
+          {isFetching
+            ? "Updating..."
+            : `Total Records: ${filtered.length}`}
         </div>
       </div>
     </div>

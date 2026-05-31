@@ -12,85 +12,167 @@ const formatMoney = (n) =>
 
 const safe = (v) => (v === undefined || v === null || v === "" ? "-" : v);
 
+const cleanText = (value) => String(value || "").toLowerCase().trim();
+
 const formatDate = (iso) => {
   if (!iso) return "-";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleDateString("en-LK", {
+
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleDateString("en-LK", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   });
 };
 
-const statusLabel = (s) => {
-  if (s === "complete") return "Complete";
-  if (s === "arrears") return "Arrears";
+const statusLabel = (status) => {
+  if (status === "complete") return "Complete";
+  if (status === "arrears") return "Arrears";
   return "Ongoing";
 };
 
-const statusClass = (s) => {
-  // ✅ 3 colors
-  if (s === "complete") return "bg-green-100 text-green-800 border-green-200";
-  if (s === "arrears") return "bg-red-100 text-red-800 border-red-200";
+const statusClass = (status) => {
+  if (status === "complete") {
+    return "bg-green-100 text-green-800 border-green-200";
+  }
+
+  if (status === "arrears") {
+    return "bg-red-100 text-red-800 border-red-200";
+  }
+
   return "bg-yellow-100 text-yellow-900 border-yellow-200";
 };
 
 export default function ViewInvestementpage() {
-  const [searchText, setSearchText] = useState("");
+  const [investmentNameInput, setInvestmentNameInput] = useState("");
+  const [customerInput, setCustomerInput] = useState("");
+  const [brokerInput, setBrokerInput] = useState("");
+  const [assetInput, setAssetInput] = useState("");
+  const [paymentInput, setPaymentInput] = useState("all");
+
+  const [filters, setFilters] = useState({
+    investmentName: "",
+    customer: "",
+    broker: "",
+    asset: "",
+    payment: "all",
+  });
+
   const [assetModalOpen, setAssetModalOpen] = useState(false);
   const [selectedAssets, setSelectedAssets] = useState([]);
   const [selectedInvTitle, setSelectedInvTitle] = useState("");
 
   const { data, isLoading, error } = useGetInvestmentsQuery();
+
   const [deleteInvestment, { isLoading: isDeleting }] =
     useDeleteInvestmentMutation();
 
   const investmentsRaw = Array.isArray(data?.data) ? data.data : [];
 
   const investments = useMemo(() => {
-    const q = searchText.trim().toLowerCase();
-    if (!q) return investmentsRaw;
+    const investmentNameSearch = cleanText(filters.investmentName);
+    const customerSearch = cleanText(filters.customer);
+    const brokerSearch = cleanText(filters.broker);
+    const assetSearch = cleanText(filters.asset);
+    const paymentSearch = filters.payment;
 
-    return investmentsRaw.filter((inv) => {
-      const customer = inv?.customerId || {};
-      const broker = inv?.brokerId || {};
-      const assets = Array.isArray(inv?.assetIds) ? inv.assetIds : [];
+    return investmentsRaw.filter((investment) => {
+      const customer = investment?.customerId || {};
+      const broker = investment?.brokerId || {};
+      const assets = Array.isArray(investment?.assetIds)
+        ? investment.assetIds
+        : [];
 
-      const assetText = assets
-        .map(
-          (a) =>
-            `${a?.assetName || ""} ${a?.assetType || ""} ${
-              a?.vehicleNumber || ""
-            } ${a?.landAddress || ""}`
-        )
-        .join(" ");
+      const investmentName = cleanText(investment?.investmentName);
 
-      const hay = [
-        inv?.investmentName,
-        customer?.nic,
-        customer?.name,
-        broker?.nic,
-        broker?.name,
-        assetText,
-        inv?.investmentAmount,
-        inv?.investmentInterestRate,
-        inv?.brokerCommissionRate,
-        inv?.startDate,
-        inv?.description,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
+      const customerName = cleanText(customer?.name);
+      const customerNic = cleanText(customer?.nic);
 
-      return hay.includes(q);
+      const brokerName = cleanText(broker?.name);
+      const brokerNic = cleanText(broker?.nic);
+
+      const assetText = cleanText(
+        assets
+          .map(
+            (asset) =>
+              `${asset?.assetName || ""} ${asset?.assetType || ""} ${
+                asset?.vehicleNumber || ""
+              } ${asset?.landAddress || ""} ${
+                asset?.assetDescription || ""
+              } ${asset?.estimateAmount || ""}`
+          )
+          .join(" ")
+      );
+
+      const paymentStatus = investment?.paymentStatus || "ongoing";
+
+      const matchInvestmentName =
+        !investmentNameSearch ||
+        investmentName.includes(investmentNameSearch);
+
+      const matchCustomer =
+        !customerSearch ||
+        customerName.includes(customerSearch) ||
+        customerNic.includes(customerSearch);
+
+      const matchBroker =
+        !brokerSearch ||
+        brokerName.includes(brokerSearch) ||
+        brokerNic.includes(brokerSearch);
+
+      const matchAsset = !assetSearch || assetText.includes(assetSearch);
+
+      const matchPayment =
+        paymentSearch === "all" || paymentStatus === paymentSearch;
+
+      return (
+        matchInvestmentName &&
+        matchCustomer &&
+        matchBroker &&
+        matchAsset &&
+        matchPayment
+      );
     });
-  }, [investmentsRaw, searchText]);
+  }, [investmentsRaw, filters]);
 
-  const openAssetsModal = (inv) => {
-    const assets = Array.isArray(inv?.assetIds) ? inv.assetIds : [];
+  const handleSearch = (e) => {
+    e.preventDefault();
+
+    setFilters({
+      investmentName: investmentNameInput,
+      customer: customerInput,
+      broker: brokerInput,
+      asset: assetInput,
+      payment: paymentInput,
+    });
+  };
+
+  const handleClear = () => {
+    setInvestmentNameInput("");
+    setCustomerInput("");
+    setBrokerInput("");
+    setAssetInput("");
+    setPaymentInput("all");
+
+    setFilters({
+      investmentName: "",
+      customer: "",
+      broker: "",
+      asset: "",
+      payment: "all",
+    });
+  };
+
+  const openAssetsModal = (investment) => {
+    const assets = Array.isArray(investment?.assetIds)
+      ? investment.assetIds
+      : [];
+
     setSelectedAssets(assets);
-    setSelectedInvTitle(inv?.investmentName || "Investment");
+    setSelectedInvTitle(investment?.investmentName || "Investment");
     setAssetModalOpen(true);
   };
 
@@ -100,17 +182,18 @@ export default function ViewInvestementpage() {
     setSelectedInvTitle("");
   };
 
-  const onDelete = async (inv) => {
+  const onDelete = async (investment) => {
     const ok = window.confirm(
-      `Delete investment "${inv?.investmentName || ""}" ?`
+      `Delete investment "${investment?.investmentName || ""}"?`
     );
+
     if (!ok) return;
 
     try {
-      await deleteInvestment(inv._id).unwrap();
+      await deleteInvestment(investment._id).unwrap();
       alert("Deleted");
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      console.error(error);
       alert("Delete failed");
     }
   };
@@ -122,33 +205,100 @@ export default function ViewInvestementpage() {
           View Investments
         </h1>
 
-        {/* SEARCH */}
+        {/* FILTER BOXES */}
         <form
-          onSubmit={(e) => e.preventDefault()}
-          className="mt-5 flex flex-col sm:flex-row justify-center gap-2"
+          onSubmit={handleSearch}
+          className="mt-5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2"
         >
-          <input
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search by Investment, Customer NIC, Broker NIC, Asset..."
-            className="w-full sm:w-[720px] rounded-xl border px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            type="button"
-            onClick={() => setSearchText("")}
-            className="rounded-lg bg-gray-200 px-4 py-2 text-xs sm:text-sm text-gray-800"
-          >
-            Clear
-          </button>
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-gray-500">
+              Investment Name
+            </label>
+            <input
+              value={investmentNameInput}
+              onChange={(e) => setInvestmentNameInput(e.target.value)}
+              placeholder="Investment name"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-gray-500">
+              Customer
+            </label>
+            <input
+              value={customerInput}
+              onChange={(e) => setCustomerInput(e.target.value)}
+              placeholder="Customer NIC or Name"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-gray-500">
+              Broker
+            </label>
+            <input
+              value={brokerInput}
+              onChange={(e) => setBrokerInput(e.target.value)}
+              placeholder="Broker NIC or Name"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-gray-500">
+              Asset
+            </label>
+            <input
+              value={assetInput}
+              onChange={(e) => setAssetInput(e.target.value)}
+              placeholder="Asset name / type / number"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-gray-500">
+              Payment
+            </label>
+            <select
+              value={paymentInput}
+              onChange={(e) => setPaymentInput(e.target.value)}
+              className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-xs sm:text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">All Payments</option>
+              <option value="ongoing">Ongoing</option>
+              <option value="complete">Complete</option>
+              <option value="arrears">Arrears</option>
+            </select>
+          </div>
+
+          <div className="flex items-end gap-2">
+            <button
+              type="submit"
+              className="w-full rounded-lg bg-blue-700 px-4 py-2 text-xs sm:text-sm font-bold text-white hover:bg-blue-800 transition"
+            >
+              Search
+            </button>
+
+            <button
+              type="button"
+              onClick={handleClear}
+              className="w-full rounded-lg bg-gray-200 px-4 py-2 text-xs sm:text-sm font-bold text-gray-800 hover:bg-gray-300 transition"
+            >
+              Clear
+            </button>
+          </div>
         </form>
 
-        <div className="mt-2 text-center text-[11px] text-gray-500">
+        <div className="mt-3 text-center text-[11px] text-gray-500">
           Total: {investments.length}
         </div>
 
-        {/* TABLE (NO SCROLL WRAPPER) */}
-        <div className="mt-5 bg-white rounded-xl shadow-sm border border-gray-200">
-          <table className="w-full table-auto">
+        {/* TABLE */}
+        <div className="mt-5 bg-white rounded-xl shadow-sm border border-gray-200 overflow-x-auto">
+          <table className="w-full min-w-[1150px] table-auto">
             <thead>
               <tr className="bg-gray-100 text-[12px] text-gray-800">
                 <th className="p-2 text-left">Investment</th>
@@ -185,28 +335,32 @@ export default function ViewInvestementpage() {
                   </td>
                 </tr>
               ) : (
-                investments.map((inv) => {
-                  const customer = inv?.customerId || {};
-                  const broker = inv?.brokerId || {};
-                  const status = inv?.paymentStatus || "ongoing";
+                investments.map((investment) => {
+                  const customer = investment?.customerId || {};
+                  const broker = investment?.brokerId || {};
+                  const status = investment?.paymentStatus || "ongoing";
 
                   return (
-                    <tr key={inv._id} className="border-t text-[12px]">
+                    <tr key={investment._id} className="border-t text-[12px]">
                       <td className="p-2">
                         <div className="font-semibold text-gray-900">
-                          {safe(inv?.investmentName)}
+                          {safe(investment?.investmentName)}
                         </div>
                       </td>
 
                       <td className="p-2">
-                        <div className="text-gray-900">{safe(customer?.nic)}</div>
+                        <div className="text-gray-900">
+                          {safe(customer?.nic)}
+                        </div>
                         <div className="text-[11px] text-gray-500">
                           {safe(customer?.name)}
                         </div>
                       </td>
 
                       <td className="p-2">
-                        <div className="text-gray-900">{safe(broker?.nic)}</div>
+                        <div className="text-gray-900">
+                          {safe(broker?.nic)}
+                        </div>
                         <div className="text-[11px] text-gray-500">
                           {safe(broker?.name)}
                         </div>
@@ -215,34 +369,37 @@ export default function ViewInvestementpage() {
                       <td className="p-2 text-center">
                         <button
                           type="button"
-                          onClick={() => openAssetsModal(inv)}
+                          onClick={() => openAssetsModal(investment)}
                           className="px-3 py-1 rounded-lg bg-blue-700 text-white text-[11px] hover:bg-blue-800"
                         >
                           View Assets
                         </button>
+
                         <div className="text-[10px] text-gray-500 mt-1">
-                          {Array.isArray(inv?.assetIds) ? inv.assetIds.length : 0}{" "}
+                          {Array.isArray(investment?.assetIds)
+                            ? investment.assetIds.length
+                            : 0}{" "}
                           item(s)
                         </div>
                       </td>
 
                       <td className="p-2 text-right font-semibold">
-                        {formatMoney(inv?.investmentAmount)}
+                        {formatMoney(investment?.investmentAmount)}
                       </td>
 
                       <td className="p-2 text-center">
-                        {safe(inv?.investmentInterestRate)}
+                        {safe(investment?.investmentInterestRate)}
                       </td>
 
                       <td className="p-2 text-center">
-                        {safe(inv?.brokerCommissionRate)}
+                        {safe(investment?.brokerCommissionRate)}
                       </td>
 
                       <td className="p-2 text-center">
-                        {formatDate(inv?.startDate)}
+                        {formatDate(investment?.startDate)}
                       </td>
 
-                      <td className="p-2">{safe(inv?.description)}</td>
+                      <td className="p-2">{safe(investment?.description)}</td>
 
                       <td className="p-2 text-center">
                         <span
@@ -254,12 +411,11 @@ export default function ViewInvestementpage() {
                         </span>
                       </td>
 
-                      {/* ✅ ONLY DELETE BUTTON */}
                       <td className="p-2 text-center">
                         <button
                           type="button"
                           disabled={isDeleting}
-                          onClick={() => onDelete(inv)}
+                          onClick={() => onDelete(investment)}
                           className="px-3 py-1 rounded-lg bg-red-600 text-white text-[11px] hover:bg-red-700 disabled:opacity-50"
                         >
                           Delete
@@ -282,10 +438,12 @@ export default function ViewInvestementpage() {
                   <div className="text-lg font-extrabold text-blue-800">
                     Assets - {safe(selectedInvTitle)}
                   </div>
+
                   <div className="text-xs text-gray-500">
                     Total: {selectedAssets.length}
                   </div>
                 </div>
+
                 <button
                   type="button"
                   onClick={closeAssetsModal}
@@ -295,41 +453,45 @@ export default function ViewInvestementpage() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-3">
+              <div className="p-4 space-y-3 max-h-[70vh] overflow-auto">
                 {selectedAssets.length === 0 ? (
-                  <div className="text-center text-gray-500 py-8">No assets</div>
+                  <div className="text-center text-gray-500 py-8">
+                    No assets
+                  </div>
                 ) : (
-                  selectedAssets.map((a) => (
+                  selectedAssets.map((asset) => (
                     <div
-                      key={a?._id}
+                      key={asset?._id}
                       className="rounded-xl border border-gray-200 bg-gray-50 p-3"
                     >
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                         <div>
                           <div className="font-bold text-gray-900">
-                            {safe(a?.assetName)}{" "}
+                            {safe(asset?.assetName)}{" "}
                             <span className="text-xs text-gray-500">
-                              ({safe(a?.assetType)})
+                              ({safe(asset?.assetType)})
                             </span>
                           </div>
+
                           <div className="text-xs text-gray-600">
-                            {safe(a?.assetDescription)}
+                            {safe(asset?.assetDescription)}
                           </div>
                         </div>
 
                         <div className="text-sm font-semibold text-blue-700">
-                          {formatMoney(a?.estimateAmount)}
+                          {formatMoney(asset?.estimateAmount)}
                         </div>
                       </div>
 
                       <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-gray-700">
                         <div>
                           <span className="text-gray-500">Vehicle No: </span>
-                          {safe(a?.vehicleNumber)}
+                          {safe(asset?.vehicleNumber)}
                         </div>
+
                         <div>
                           <span className="text-gray-500">Land Address: </span>
-                          {safe(a?.landAddress)}
+                          {safe(asset?.landAddress)}
                         </div>
                       </div>
                     </div>

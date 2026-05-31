@@ -122,21 +122,29 @@ const InvestmentPage = () => {
     const intRate = Number(investmentInterestRate);
     const commRate = Number(brokerCommissionRate);
 
-    // ✅ investment amount must be > 0
     if (!Number.isFinite(invAmt) || invAmt <= 0) return alert("Invalid investment amount");
     if (!Number.isFinite(intRate) || intRate < 0) return alert("Invalid interest rate");
     if (!Number.isFinite(commRate) || commRate < 0) return alert("Invalid broker commission");
 
-    // ✅ IMPORTANT:
-    // ONE investment document + assetIds array
+    // ✅ Guard: commission rate cannot exceed interest rate
+    if (commRate > intRate) return alert("Broker commission rate cannot exceed interest rate");
+
+    // ✅ Business logic (sent to backend for record-keeping):
+    //   Gross monthly interest  = amount × interestRate%
+    //   Broker commission       = amount × commissionRate%   (fixed slice from principal)
+    //   Net customer interest   = amount × (interestRate − commissionRate)%
     const payload = {
       investmentName: investmentName.trim(),
       customerNic: String(selectedCustomer.nic).trim(),
       brokerNic: String(selectedBroker.nic).trim(),
-      assetIds: selectedAssetIds, // ✅ array
-      investmentAmount: invAmt, // ✅ one amount for whole investment
+      assetIds: selectedAssetIds,
+      investmentAmount: invAmt,
       investmentInterestRate: intRate,
       brokerCommissionRate: commRate,
+      // Derived values — useful for backend reports / ledger
+      grossMonthlyInterest: (invAmt * intRate) / 100,
+      brokerMonthlyCommission: (invAmt * commRate) / 100,
+      netCustomerInterest: (invAmt * (intRate - commRate)) / 100,
       startDate, // YYYY-MM-DD
       description: description ? description.trim() : "",
     };
@@ -145,7 +153,6 @@ const InvestmentPage = () => {
       const res = await createInvestment(payload).unwrap();
       if (!res?.success) return alert(res?.message || "Failed");
 
-      // ✅ because now only ONE investment will be created
       alert("Investment created successfully");
 
       // clear
@@ -163,8 +170,21 @@ const InvestmentPage = () => {
     }
   };
 
-  // ✅ live preview calculations (frontend only)
-  const previewInterest = useMemo(() => {
+  // ─── Live preview calculations ────────────────────────────────────────────
+  //
+  //  Business logic:
+  //    Gross monthly interest  = amount × interestRate%
+  //    Broker commission       = amount × commissionRate%   ← flat % of principal
+  //    Net customer interest   = amount × (interestRate − commissionRate)%
+  //
+  //  Example:
+  //    amount = 100,000 | interestRate = 10% | commissionRate = 1%
+  //    Gross interest  = 100,000 × 10%  = 10,000
+  //    Broker comm     = 100,000 × 1%   =  1,000
+  //    Net interest    = 100,000 × 9%   =  9,000  ✅
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const previewGrossInterest = useMemo(() => {
     const a = Number(investmentAmount || 0);
     const r = Number(investmentInterestRate || 0);
     if (!Number.isFinite(a) || !Number.isFinite(r)) return 0;
@@ -172,11 +192,21 @@ const InvestmentPage = () => {
   }, [investmentAmount, investmentInterestRate]);
 
   const previewCommission = useMemo(() => {
-    const interest = Number(previewInterest || 0);
+    const a = Number(investmentAmount || 0);
     const r = Number(brokerCommissionRate || 0);
-    if (!Number.isFinite(interest) || !Number.isFinite(r)) return 0;
-    return (interest * r) / 100;
-  }, [previewInterest, brokerCommissionRate]);
+    if (!Number.isFinite(a) || !Number.isFinite(r)) return 0;
+    return (a * r) / 100;
+  }, [investmentAmount, brokerCommissionRate]);
+
+  const previewNetInterest = useMemo(() => {
+    return previewGrossInterest - previewCommission;
+  }, [previewGrossInterest, previewCommission]);
+
+  const effectiveRate = useMemo(() => {
+    const intRate = Number(investmentInterestRate || 0);
+    const commRate = Number(brokerCommissionRate || 0);
+    return Math.max(0, intRate - commRate);
+  }, [investmentInterestRate, brokerCommissionRate]);
 
   return (
     <div className="w-full min-h-screen bg-[#ffffff]">
@@ -193,7 +223,7 @@ const InvestmentPage = () => {
               </h2>
 
               <form onSubmit={handleSubmit} className="space-y-4">
-                {/* ✅ Investment Name */}
+                {/* Investment Name */}
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">
                     Investment Name
@@ -320,7 +350,7 @@ const InvestmentPage = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Investment Amount (One Amount)
+                      Investment Amount
                     </label>
                     <input
                       type="number"
@@ -363,7 +393,7 @@ const InvestmentPage = () => {
                     />
                   </div>
 
-                  {/* Calendar */}
+                  {/* Start Date + Live Preview */}
                   <div className="sm:col-span-2">
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Interest & Commission Calculate Start Date
@@ -375,10 +405,25 @@ const InvestmentPage = () => {
                       className="w-full bg-white text-gray-800 px-4 py-2.5 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       required
                     />
-                    <div className="text-[11px] text-gray-600 mt-1">
-                      Preview Interest: <b>{formatMoney(previewInterest)}</b> | Preview Commission:{" "}
-                      <b>{formatMoney(previewCommission)}</b>
-                    </div>
+
+                    {/* ✅ Live Preview Breakdown */}
+                    {investmentAmount && investmentInterestRate && brokerCommissionRate && (
+                      <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs space-y-1">
+                        <div className="font-bold text-blue-800 mb-1">Monthly Preview</div>
+                        <div className="flex justify-between text-gray-700">
+                          <span>Gross Interest ({investmentInterestRate}%)</span>
+                          <span className="font-semibold">{formatMoney(previewGrossInterest)}</span>
+                        </div>
+                        <div className="flex justify-between text-red-600">
+                          <span>Broker Commission ({brokerCommissionRate}%)</span>
+                          <span className="font-semibold">− {formatMoney(previewCommission)}</span>
+                        </div>
+                        <div className="border-t border-blue-200 pt-1 flex justify-between text-green-700 font-bold">
+                          <span>Net Customer Interest ({effectiveRate}%)</span>
+                          <span>{formatMoney(previewNetInterest)}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="sm:col-span-2">

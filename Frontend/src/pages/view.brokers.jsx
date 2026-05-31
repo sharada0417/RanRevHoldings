@@ -1,6 +1,11 @@
+// src/pages/ViewBrokersPage.jsx
+
 import React, { useEffect, useMemo, useState } from "react";
 import { useGetBrokersQuery } from "../api/brokerApi";
-import { useLazyGetBrokerSummaryByNicQuery } from "../api/brokerpayApi";
+import {
+  useLazyGetBrokerSummaryByNicQuery,
+  useLazyGetBrokerSummaryByIdQuery,
+} from "../api/brokerpayApi";
 
 const money = (n) => Number(n || 0).toLocaleString("en-LK");
 
@@ -31,54 +36,70 @@ const ViewBrokersPage = () => {
   const [searchText, setSearchText] = useState("");
 
   const { data: brokersRes, isLoading, isError, refetch } = useGetBrokersQuery();
-  const [triggerSummary] = useLazyGetBrokerSummaryByNicQuery();
+  const [triggerSummaryByNic] = useLazyGetBrokerSummaryByNicQuery();
+  const [triggerSummaryById]  = useLazyGetBrokerSummaryByIdQuery();   // ✅ for null-NIC brokers
 
   const brokers = useMemo(() => brokersRes?.data || [], [brokersRes]);
 
-  const [totalsByNic, setTotalsByNic] = useState({}); // NIC -> { totalCommission, pending, status }
+  // key: broker NIC (uppercase) OR broker _id (for null-NIC brokers)
+  // value: { totalEarned, pending, status }
+  const [totalsByKey, setTotalsByKey] = useState({});
 
   const filtered = useMemo(() => {
     const q = searchText.trim().toLowerCase();
     if (!q) return brokers;
-    return brokers.filter((b) => `${b.nic || ""} ${b.name || ""}`.toLowerCase().includes(q));
+    return brokers.filter((b) =>
+      `${b.nic || ""} ${b.name || ""}`.toLowerCase().includes(q)
+    );
   }, [brokers, searchText]);
 
-  const loadSummary = async (nic) => {
-    const key = String(nic || "").trim().toUpperCase();
-    if (!key) return;
+  /**
+   * Load summary for one broker.
+   * - If broker has a NIC  → use /broker/:nic/summary
+   * - If broker has no NIC → use /broker/id/:id/summary
+   */
+  const loadSummary = async (broker) => {
+    const nic   = String(broker.nic || "").trim().toUpperCase();
+    const mapKey = nic || String(broker._id);  // ✅ always have a key
 
     try {
-      const res = await triggerSummary(key).unwrap();
+      let res;
+      if (nic) {
+        res = await triggerSummaryByNic(nic).unwrap();
+      } else {
+        // ✅ broker has no NIC — fetch by _id
+        res = await triggerSummaryById(String(broker._id)).unwrap();
+      }
 
-      // ✅ backend totals
-      const totalCommission = res?.totals?.totalCommission ?? 0;
-      const pending = res?.totals?.pending ?? 0;
+      // Backend returns: { totals: { totalEarned, totalPaid, pending } }
+      const totalEarned = res?.totals?.totalEarned ?? 0;
+      const pending     = res?.totals?.pending     ?? 0;
+      const status      = Number(pending) > 0 ? "pending" : "complete";
 
-      const status = Number(pending) > 0 ? "pending" : "complete";
-
-      setTotalsByNic((prev) => ({
+      setTotalsByKey((prev) => ({
         ...prev,
-        [key]: { totalCommission, pending, status },
+        [mapKey]: { totalEarned, pending, status },
       }));
     } catch {
-      setTotalsByNic((prev) => ({
+      setTotalsByKey((prev) => ({
         ...prev,
-        [key]: { totalCommission: 0, pending: 0, status: "complete" },
+        [mapKey]: { totalEarned: 0, pending: 0, status: "complete" },
       }));
     }
   };
 
-  // ✅ auto load summaries for visible rows (first 50)
+  // Auto-load summaries for visible rows (first 50)
   useEffect(() => {
     filtered.slice(0, 50).forEach((b) => {
-      const nic = String(b.nic || "").trim().toUpperCase();
-      if (nic && !totalsByNic[nic]) loadSummary(nic);
+      const nic    = String(b.nic || "").trim().toUpperCase();
+      const mapKey = nic || String(b._id);
+      if (!totalsByKey[mapKey]) loadSummary(b);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtered]);
 
   const onRefresh = async () => {
-    setTotalsByNic({});
+    setTotalsByKey({});
     await refetch();
   };
 
@@ -122,7 +143,7 @@ const ViewBrokersPage = () => {
                 <tr className="bg-gray-100 text-sm">
                   <th className="p-3 w-[160px]">Broker NIC</th>
                   <th className="p-3 w-[240px]">Broker Name</th>
-                  <th className="p-3 w-[220px]">Total Commission</th>
+                  <th className="p-3 w-[220px]">Total Commission Earned</th>
                   <th className="p-3 w-[220px]">Pending Payment</th>
                   <th className="p-3 w-[160px]">Status</th>
                 </tr>
@@ -130,23 +151,26 @@ const ViewBrokersPage = () => {
 
               <tbody className="block sm:table-row-group">
                 {filtered.map((b) => {
-                  const nic = String(b.nic || "").trim().toUpperCase();
-                  const totals = totalsByNic[nic];
+                  const nic    = String(b.nic || "").trim().toUpperCase();
+                  const mapKey = nic || String(b._id);    // ✅ consistent key
+                  const totals = totalsByKey[mapKey];
 
-                  const totalCommission = totals?.totalCommission ?? 0;
-                  const pending = totals?.pending ?? 0;
-                  const status = totals?.status ?? "pending";
+                  const totalEarned = totals?.totalEarned ?? 0;
+                  const pending     = totals?.pending     ?? 0;
+                  const status      = totals?.status      ?? "pending";
 
                   return (
                     <tr
-                      key={nic || b._id}
+                      key={String(b._id)}
                       className="block sm:table-row border-b sm:border-gray-200 px-2 sm:px-0"
                     >
                       {[
-                        ["Broker NIC", nic || "-"],
-                        ["Broker Name", b.name || "-"],
-                        ["Total Commission", `Rs. ${money(totalCommission)}`],
-                        ["Pending Payment", `Rs. ${money(pending)}`],
+                        ["Broker NIC",               nic || "-"],
+                        ["Broker Name",              b.name || "-"],
+                        ["Total Commission Earned",
+                          totals ? `Rs. ${money(totalEarned)}` : "Loading..."],
+                        ["Pending Payment",
+                          totals ? `Rs. ${money(pending)}` : "Loading..."],
                       ].map(([label, value]) => (
                         <td
                           key={label}
@@ -175,7 +199,10 @@ const ViewBrokersPage = () => {
 
                 {filtered.length === 0 && (
                   <tr className="block sm:table-row">
-                    <td className="block sm:table-cell p-6 text-center text-gray-500" colSpan={5}>
+                    <td
+                      className="block sm:table-cell p-6 text-center text-gray-500"
+                      colSpan={5}
+                    >
                       No brokers found
                     </td>
                   </tr>
@@ -184,6 +211,10 @@ const ViewBrokersPage = () => {
             </table>
           </div>
         )}
+
+        <div className="mt-2 text-[11px] text-gray-500 text-center">
+          Commission earned = customer interest paid × (brokerRate ÷ totalRate)
+        </div>
       </div>
     </div>
   );

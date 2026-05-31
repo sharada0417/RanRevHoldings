@@ -1,3 +1,5 @@
+// src/store/store.js  (MODIFIED - added notificationApi)
+
 import { configureStore } from "@reduxjs/toolkit";
 import { setupListeners } from "@reduxjs/toolkit/query";
 
@@ -22,6 +24,7 @@ import { investmentApi } from "../api/investmentApi";
 import { customerPayApi } from "../api/customerpayApi";
 import { brokerPayApi } from "../api/brokerpayApi";
 import { dashboardApi } from "../api/dashboardApi";
+import { notificationApi } from "../api/notificationApi"; // ✅ NEW
 
 const store = configureStore({
   reducer: {
@@ -30,9 +33,10 @@ const store = configureStore({
     broker: brokerReducer,
     asset: assetReducer,
     investment: investmentReducer,
-    
+
     customerPay: customerPayReducer,
     brokerPay: brokerPayReducer,
+
     [dashboardApi.reducerPath]: dashboardApi.reducer,
     [userApi.reducerPath]: userApi.reducer,
     [customerApi.reducerPath]: customerApi.reducer,
@@ -45,6 +49,8 @@ const store = configureStore({
 
     [customerPayHistoryApi.reducerPath]: customerPayHistoryApi.reducer,
     [brokerPayHistoryApi.reducerPath]: brokerPayHistoryApi.reducer,
+
+    [notificationApi.reducerPath]: notificationApi.reducer, // ✅ NEW
   },
 
   middleware: (getDefaultMiddleware) =>
@@ -57,9 +63,9 @@ const store = configureStore({
       dashboardApi.middleware,
       customerPayApi.middleware,
       brokerPayApi.middleware,
-
       customerPayHistoryApi.middleware,
-      brokerPayHistoryApi.middleware
+      brokerPayHistoryApi.middleware,
+      notificationApi.middleware, // ✅ NEW
     ),
 });
 

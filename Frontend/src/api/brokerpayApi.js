@@ -1,3 +1,5 @@
+// src/api/brokerpayApi.js  (MODIFIED — added getBrokerSummaryById endpoint)
+
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
@@ -15,13 +17,19 @@ export const brokerPayApi = createApi({
     },
   }),
   endpoints: (builder) => ({
-    // ✅ summary for View Brokers page
+    // ✅ summary by NIC (for brokers that have a NIC)
     getBrokerSummaryByNic: builder.query({
       query: (nic) => `broker/${encodeURIComponent(nic)}/summary`,
       providesTags: (res, err, nic) => [{ type: "BrokerPaySummary", id: nic }],
     }),
 
-    // ✅ CREATE broker payment (this hook was missing)
+    // ✅ NEW: summary by MongoDB _id (for brokers that have no NIC)
+    getBrokerSummaryById: builder.query({
+      query: (id) => `broker/id/${encodeURIComponent(id)}/summary`,
+      providesTags: (res, err, id) => [{ type: "BrokerPaySummary", id }],
+    }),
+
+    // ✅ CREATE broker payment
     createBrokerPayment: builder.mutation({
       query: (payload) => ({
         url: "pay",
@@ -30,7 +38,6 @@ export const brokerPayApi = createApi({
       }),
       invalidatesTags: (res, err, arg) => [
         { type: "BrokerPay", id: "LIST" },
-        // refresh broker summary too (if brokerNic available)
         ...(arg?.brokerNic
           ? [{ type: "BrokerPaySummary", id: String(arg.brokerNic).trim().toUpperCase() }]
           : []),
@@ -41,5 +48,6 @@ export const brokerPayApi = createApi({
 
 export const {
   useLazyGetBrokerSummaryByNicQuery,
-  useCreateBrokerPaymentMutation, // ✅ now available
+  useLazyGetBrokerSummaryByIdQuery,   // ✅ NEW
+  useCreateBrokerPaymentMutation,
 } = brokerPayApi;
