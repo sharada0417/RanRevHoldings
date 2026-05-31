@@ -19,33 +19,27 @@ const safeNum = (v, d = 0) => {
 };
 
 /**
- * ✅ CORE: monthly interest = principal * (rate / 100)
- */
-const monthlyInterest = (principal, ratePercent) => {
-  const p = safeNum(principal, 0);
-  const r = safeNum(ratePercent, 0);
-  return Math.max((p * r) / 100, 0);
-};
-
-/**
- * ✅ CORE CYCLE RULE:
+ * ✅ FIXED INTEREST SPLIT LOGIC
  *
- * startDate = calculationStartDate (when interest starts accruing).
- * Every calendar month from startDate, one interest payment is due.
+ * investmentInterestRate is the TOTAL rate charged to the customer.
+ * brokerCommissionRate is carved OUT of that total:
  *
- * completedCycles = number of due dates that have already PASSED.
- * (due date = startDate + N months, where due date < now)
+ *   monthlyTotalInterest    = investmentAmount × totalRate / 100     (what customer pays per month)
+ *   monthlyBrokerCommission = investmentAmount × brokerRate / 100    (broker's portion)
+ *   monthlyOwnerInterest    = investmentAmount × (totalRate - brokerRate) / 100  (owner's portion)
  *
  * Example:
- *   startDate = 2025-06-10, now = 2026-03-05
- *   due dates: 2025-07-10 ✓, 2025-08-10 ✓, ... 2026-02-10 ✓  → 8 cycles
- *   next due:  2026-03-10 (not past yet → not arrears for that cycle)
+ *   investmentAmount = 100,000 | totalRate = 10% | brokerRate = 1%
+ *   monthlyTotal     = 10,000
+ *   monthlyBroker    =  1,000
+ *   monthlyOwner     =  9,000
  *
- *   startDate = 2025-05-24, now = 2025-06-20
- *   2025-06-24 not passed yet → 0 cycles → no arrears
- *
- *   startDate = 2025-05-24, now = 2025-06-25
- *   2025-06-24 passed → 1 cycle → 1 interest due
+ * Arrears tracking: still based on TOTAL interest due (customer's obligation).
+ */
+
+/**
+ * Count completed calendar-month cycles since startDate.
+ * A cycle is completed when its due date < now.
  */
 const completedCycles = (startDate, now = new Date()) => {
   if (!startDate) return 0;
@@ -83,21 +77,28 @@ const nextDueDate = (startDate, now = new Date()) => {
 };
 
 /**
- * Full investment calculation numbers based on 30-day cycle rule
+ * Full investment calculation numbers.
+ * Customer is charged on TOTAL rate; owner and broker share that total.
  */
 const calcInvestmentNumbers = (inv, now = new Date()) => {
   const principal = safeNum(inv.investmentAmount, 0);
-  const rate = safeNum(inv.investmentInterestRate, 0);
+  const totalRate = safeNum(inv.investmentInterestRate, 0);
+  const brokerRate = safeNum(inv.brokerCommissionRate, 0);
+  const ownerRate = totalRate - brokerRate;
 
-  const monthInt = monthlyInterest(principal, rate);
+  // Monthly amounts
+  const monthlyTotalInterest = (principal * totalRate) / 100;
+  const monthlyBrokerCommission = (principal * brokerRate) / 100;
+  const monthlyOwnerInterest = (principal * ownerRate) / 100;
+
   const cycles = completedCycles(inv.startDate, now);
 
-  // Total interest that SHOULD have been paid by now (all past due dates)
-  const totalDueInterest = monthInt * cycles;
+  // Total interest the customer should have paid by now
+  const totalDueInterest = monthlyTotalInterest * cycles;
 
   const interestPaid = safeNum(inv.interestPaidAmount, 0);
 
-  // Arrears = unpaid interest from past due cycles only
+  // Arrears = unpaid interest from past due cycles
   const arrearsInterest = Math.max(totalDueInterest - interestPaid, 0);
 
   const principalPaid = safeNum(inv.principalPaidAmount, 0);
@@ -107,7 +108,9 @@ const calcInvestmentNumbers = (inv, now = new Date()) => {
       : Math.max(safeNum(inv.remainingPendingAmount, 0), 0);
 
   const arrearsMonthsCount =
-    arrearsInterest > 0 && monthInt > 0 ? Math.ceil(arrearsInterest / monthInt) : 0;
+    arrearsInterest > 0 && monthlyTotalInterest > 0
+      ? Math.ceil(arrearsInterest / monthlyTotalInterest)
+      : 0;
 
   let status = "pending";
   if (principalPending <= 0 && arrearsInterest <= 0) status = "complete";
@@ -118,8 +121,12 @@ const calcInvestmentNumbers = (inv, now = new Date()) => {
 
   return {
     principal,
-    rate,
-    monthlyInterest: monthInt,
+    totalRate,
+    brokerRate,
+    ownerRate,
+    monthlyTotalInterest,
+    monthlyBrokerCommission,
+    monthlyOwnerInterest,
     cycles,
     totalDueInterest,
     interestPaidAmount: interestPaid,
@@ -160,12 +167,11 @@ export const getCustomerFlow = async (req, res) => {
     }
 
     const customerIds = customers.map((c) => c._id);
-
     const totalPaidMap = await getCustomerTotalPaidMap(customerIds);
 
     const investments = await Investment.find({ customerId: { $in: customerIds } })
       .select(
-        "_id customerId brokerId assetIds investmentName investmentAmount investmentInterestRate startDate interestPaidAmount principalPaidAmount remainingPendingAmount description createdAt"
+        "_id customerId brokerId assetIds investmentName investmentAmount investmentInterestRate brokerCommissionRate startDate interestPaidAmount principalPaidAmount remainingPendingAmount description createdAt"
       )
       .lean();
 
@@ -202,7 +208,6 @@ export const getCustomerFlow = async (req, res) => {
           if (!maxDate || dt > maxDate) maxDate = dt;
         }
 
-        // earliest upcoming due date
         if (calc.nextDueDate) {
           if (!nextDue || calc.nextDueDate < nextDue) nextDue = calc.nextDueDate;
         }
@@ -235,10 +240,14 @@ export const getCustomerFlow = async (req, res) => {
       count: rows.length,
       data: rows,
       rule: {
+        interestSplit:
+          "monthlyTotalInterest = investmentAmount × totalRate%. " +
+          "monthlyBrokerCommission = investmentAmount × brokerRate%. " +
+          "monthlyOwnerInterest = investmentAmount × (totalRate - brokerRate)%.",
         cycle:
-          "Interest is due every calendar month from startDate (calculationStartDate). " +
+          "Interest is due every calendar month from startDate. " +
           "completedCycles = count of due dates already past. " +
-          "arrearsInterest = (monthlyInterest × completedCycles) − interestPaid",
+          "arrearsInterest = (monthlyTotalInterest × completedCycles) − interestPaid",
         arrears: "arrearsInterest > 0 (customer missed one or more past due cycles)",
         pending: "no arrears but principal not fully paid",
         complete: "principalPending = 0 AND arrearsInterest = 0",
@@ -315,8 +324,12 @@ export const getCustomerFlowByNic = async (req, res) => {
           _id: inv._id,
           investmentName: inv.investmentName,
           investmentAmount: calc.principal,
-          investmentInterestRate: calc.rate,
-          monthlyInterest: calc.monthlyInterest,
+          investmentInterestRate: calc.totalRate,
+          brokerCommissionRate: calc.brokerRate,
+          ownerInterestRate: calc.ownerRate,
+          monthlyTotalInterest: Number(calc.monthlyTotalInterest.toFixed(2)),
+          monthlyBrokerCommission: Number(calc.monthlyBrokerCommission.toFixed(2)),
+          monthlyOwnerInterest: Number(calc.monthlyOwnerInterest.toFixed(2)),
           startDate: inv.startDate,
           cycles: calc.cycles,
           totalDueInterest: Number(calc.totalDueInterest.toFixed(2)),
@@ -402,7 +415,15 @@ export const getCustomerInvestmentsByNic = async (req, res) => {
         assets: inv.assetIds || [],
 
         investmentAmount: calc.principal,
-        monthlyInterest: Number(calc.monthlyInterest.toFixed(2)),
+        investmentInterestRate: calc.totalRate,
+        brokerCommissionRate: calc.brokerRate,
+        ownerInterestRate: calc.ownerRate,
+
+        // ✅ Monthly breakdown shown to user
+        monthlyTotalInterest: Number(calc.monthlyTotalInterest.toFixed(2)),
+        monthlyBrokerCommission: Number(calc.monthlyBrokerCommission.toFixed(2)),
+        monthlyOwnerInterest: Number(calc.monthlyOwnerInterest.toFixed(2)),
+
         completedCycles: calc.cycles,
         totalDueInterest: Number(calc.totalDueInterest.toFixed(2)),
         interestPaidToNow: Number(calc.interestPaidAmount.toFixed(2)),
@@ -435,8 +456,8 @@ export const getCustomerInvestmentsByNic = async (req, res) => {
  *
  * payFor: "interest" | "principal" | "interest+principal"
  *
- * Interest outstanding = (monthlyInterest × completedCycles) − interestPaid
- *   (only cycles whose due date has already passed)
+ * Customer pays based on TOTAL interest rate.
+ * Interest outstanding = (monthlyTotalInterest × completedCycles) − interestPaid
  */
 export const createCustomerPayment = async (req, res) => {
   try {
@@ -501,23 +522,27 @@ export const createCustomerPayment = async (req, res) => {
 
     const now = new Date();
 
-    // ✅ Calculate using 30-day cycle rule
+    // ✅ FIXED: Use TOTAL rate for customer obligation
     const principal = safeNum(inv.investmentAmount, 0);
-    const rate = safeNum(inv.investmentInterestRate, 0);
-    const monthInt = monthlyInterest(principal, rate);
+    const totalRate = safeNum(inv.investmentInterestRate, 0);
+    const brokerRate = safeNum(inv.brokerCommissionRate, 0);
+    const ownerRate = totalRate - brokerRate;
+
+    const monthlyTotalInterest = (principal * totalRate) / 100;
+    const monthlyBrokerCommission = (principal * brokerRate) / 100;
+    const monthlyOwnerInterest = (principal * ownerRate) / 100;
+
     const cycles = completedCycles(inv.startDate, now);
 
-    // Total interest owed from all past due cycles
-    const totalDueInterest = monthInt * cycles;
+    // Total interest the customer should have paid (all past due cycles)
+    const totalDueInterest = monthlyTotalInterest * cycles;
     const interestPaidBefore = safeNum(inv.interestPaidAmount, 0);
 
-    // Arrears-only interest (past due cycles not yet paid)
+    // Arrears from past cycles only
     const arrearsInterestBeforePayment = Math.max(totalDueInterest - interestPaidBefore, 0);
 
-    // Outstanding interest the customer can pay now:
-    // = arrears from past cycles + current month's interest (next upcoming cycle)
-    // We allow paying up to: arrearsInterest + 1 month forward
-    const interestOutstanding = Math.max(totalDueInterest + monthInt - interestPaidBefore, 0);
+    // Allow paying up to: arrears + 1 month forward
+    const interestOutstanding = Math.max(totalDueInterest + monthlyTotalInterest - interestPaidBefore, 0);
 
     const principalPaidBefore = safeNum(inv.principalPaidAmount, 0);
     const principalPendingBefore =
@@ -583,7 +608,6 @@ export const createCustomerPayment = async (req, res) => {
 
     await inv.save();
 
-    // Check if fully settled (no arrears, no principal pending)
     const arrearsAfter = Math.max(totalDueInterest - inv.interestPaidAmount, 0);
     const isSettled = principalPendingAfter <= 0 && arrearsAfter <= 0;
 
@@ -594,7 +618,6 @@ export const createCustomerPayment = async (req, res) => {
       );
     }
 
-    // Next due date after payment
     const nextDue = nextDueDate(inv.startDate, now);
 
     return res.status(201).json({
@@ -605,7 +628,15 @@ export const createCustomerPayment = async (req, res) => {
         summary: {
           investmentId: inv._id,
           calculationStartDate: inv.startDate,
-          monthlyInterest: Number(monthInt.toFixed(2)),
+
+          // ✅ Full monthly breakdown
+          investmentInterestRate: totalRate,
+          brokerCommissionRate: brokerRate,
+          ownerInterestRate: ownerRate,
+          monthlyTotalInterest: Number(monthlyTotalInterest.toFixed(2)),
+          monthlyBrokerCommission: Number(monthlyBrokerCommission.toFixed(2)),
+          monthlyOwnerInterest: Number(monthlyOwnerInterest.toFixed(2)),
+
           completedCycles: cycles,
           totalDueInterest: Number(totalDueInterest.toFixed(2)),
           arrearsInterestBeforePayment: Number(arrearsInterestBeforePayment.toFixed(2)),

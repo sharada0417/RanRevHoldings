@@ -1,3 +1,5 @@
+// backend/server.js  (MODIFIED - added notificationRouter)
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -14,6 +16,7 @@ import brokerpaymentRouter from "./api/brokerpayment.js";
 import customerPaymentHistoryRouter from "./api/customerPaymentHistory.js";
 import brokerPaymentHistoryRouter from "./api/brokerpaymentHistory.js";
 import userRouter from "./api/user.js";
+import notificationRouter from "./api/notification.js"; // ✅ NEW
 
 dotenv.config();
 
@@ -26,7 +29,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "http://192.168.8.107:5173", // 👈 frontend network IP
+      "http://192.168.8.107:5173",
     ],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
@@ -57,6 +60,7 @@ app.use("/api/customer", customerRoute);
 app.use("/api/broker", brokerRouter);
 app.use("/api/assets", assetRouter);
 app.use("/api/investment", investmentRouter);
+app.use("/api/notifications", notificationRouter); // ✅ NEW
 
 /* =======================
    ✅ Test Route

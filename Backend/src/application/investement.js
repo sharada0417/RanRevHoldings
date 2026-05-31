@@ -25,21 +25,28 @@ const toDateOrFail = (val) => {
 };
 
 /**
- * ✅ CORE RULE:
- * calculationStartDate = the date interest/commission calculation starts.
- * Every 30 days from that date, customer must pay interest.
+ * ✅ FIXED INTEREST SPLIT LOGIC
+ *
+ * investmentInterestRate = TOTAL rate charged to customer.
+ * brokerCommissionRate   = carved OUT of the total (not added on top).
+ *
+ *   monthlyTotalInterest    = investmentAmount × totalRate / 100
+ *   monthlyBrokerCommission = investmentAmount × brokerRate / 100
+ *   monthlyOwnerInterest    = investmentAmount × (totalRate - brokerRate) / 100
  *
  * Example:
- *   calculationStartDate = 2025-05-24
- *   Due dates: 2025-06-24, 2025-07-24, 2025-08-24 ...
+ *   amount=100000, totalRate=10%, brokerRate=1%
+ *   monthlyTotal  = 10,000  (customer pays this)
+ *   monthlyBroker =  1,000  (broker earns this)
+ *   monthlyOwner  =  9,000  (owner earns this)
  *
- *   calculationStartDate = 2025-06-10, today = 2026-03-05
- *   Due dates passed: 2025-07-10, 2025-08-10 ... 2026-02-10  => 8 cycles past
- *   Next due: 2026-03-10 (not yet arrears for that cycle)
- *
- * completedCycles = number of full 30-day cycles that have PASSED since startDate
- *   i.e. cycles where the due date < now (customer should have already paid)
+ * Arrears: based on TOTAL interest (customer's obligation).
+ * Status:
+ *   complete  = principal fully paid
+ *   arrears   = missed at least one interest cycle
+ *   ongoing   = up to date
  */
+
 const completedCycles = (startDate, now = new Date()) => {
   if (!startDate) return 0;
   const s = new Date(startDate);
@@ -47,7 +54,7 @@ const completedCycles = (startDate, now = new Date()) => {
 
   let count = 0;
   const due = new Date(s);
-  due.setMonth(due.getMonth() + 1); // first due date = startDate + 30 days (calendar month)
+  due.setMonth(due.getMonth() + 1);
 
   while (due < now) {
     count++;
@@ -57,21 +64,18 @@ const completedCycles = (startDate, now = new Date()) => {
   return count;
 };
 
-/**
- * Payment status for investment list coloring:
- *  - complete  : principal fully paid
- *  - arrears   : missed at least one interest payment cycle
- *  - ongoing   : up to date
- */
 const calcPaymentStatus = (inv) => {
   const invAmt = Number(inv?.investmentAmount || 0);
+  const totalRate = Number(inv?.investmentInterestRate || 0);
+  const brokerRate = Number(inv?.brokerCommissionRate || 0);
   const principalPaid = Number(inv?.principalPaidAmount || 0);
   const interestPaid = Number(inv?.interestPaidAmount || 0);
 
   if (principalPaid >= invAmt && invAmt > 0) return "complete";
 
   const cycles = completedCycles(inv?.startDate);
-  const monthInt = (invAmt * Number(inv?.investmentInterestRate || 0)) / 100;
+  // Use TOTAL rate for arrears check (customer owes the full amount)
+  const monthInt = (invAmt * totalRate) / 100;
   const totalDueInterest = monthInt * cycles;
 
   if (cycles > 0 && interestPaid < totalDueInterest) return "arrears";
@@ -81,14 +85,24 @@ const calcPaymentStatus = (inv) => {
 };
 
 /**
+ * Build the monthly interest breakdown for response
+ */
+const buildMonthlyBreakdown = (inv) => {
+  const principal = Number(inv.investmentAmount || 0);
+  const totalRate = Number(inv.investmentInterestRate || 0);
+  const brokerRate = Number(inv.brokerCommissionRate || 0);
+  const ownerRate = totalRate - brokerRate;
+
+  return {
+    monthlyTotalInterest: Number(((principal * totalRate) / 100).toFixed(2)),
+    monthlyBrokerCommission: Number(((principal * brokerRate) / 100).toFixed(2)),
+    monthlyOwnerInterest: Number(((principal * ownerRate) / 100).toFixed(2)),
+    ownerInterestRate: ownerRate,
+  };
+};
+
+/**
  * ✅ CREATE INVESTMENT
- * POST /api/investment
- *
- * Body fields:
- *   investmentName, customerNic, brokerNic, assetIds[],
- *   investmentAmount, investmentInterestRate, brokerCommissionRate,
- *   startDate  <-- this IS the calculationStartDate
- *   description
  */
 export const createInvestment = async (req, res) => {
   try {
@@ -118,7 +132,7 @@ export const createInvestment = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          "investmentName, customerNic, brokerNic, assetIds[], investmentAmount, investmentInterestRate, brokerCommissionRate, startDate (calculationStartDate) are required",
+          "investmentName, customerNic, brokerNic, assetIds[], investmentAmount, investmentInterestRate, brokerCommissionRate, startDate are required",
       });
     }
 
@@ -148,6 +162,14 @@ export const createInvestment = async (req, res) => {
     const commRate = toNumberOrFail(brokerCommissionRate);
     if (commRate === null || commRate < 0) {
       return res.status(400).json({ success: false, message: "brokerCommissionRate must be >= 0" });
+    }
+
+    // ✅ Validate broker rate doesn't exceed total rate
+    if (commRate > intRate) {
+      return res.status(400).json({
+        success: false,
+        message: `brokerCommissionRate (${commRate}%) cannot exceed investmentInterestRate (${intRate}%)`,
+      });
     }
 
     const startDt = toDateOrFail(startDate);
@@ -187,7 +209,7 @@ export const createInvestment = async (req, res) => {
       investmentAmount: invAmt,
       investmentInterestRate: intRate,
       brokerCommissionRate: commRate,
-      startDate: startDt, // ✅ calculationStartDate stored here
+      startDate: startDt,
       description: description ? String(description).trim() : "",
     });
 
@@ -199,13 +221,24 @@ export const createInvestment = async (req, res) => {
         "assetType assetDescription estimateAmount assetName vehicleNumber landAddress createdAt isReleased"
       );
 
+    const breakdown = buildMonthlyBreakdown(populated);
+    const ownerRate = intRate - commRate;
+
     return res.status(201).json({
       success: true,
       message: "Investment created successfully",
       data: populated,
+      monthlyBreakdown: {
+        investmentInterestRate: intRate,
+        brokerCommissionRate: commRate,
+        ownerInterestRate: ownerRate,
+        monthlyTotalInterest: breakdown.monthlyTotalInterest,
+        monthlyBrokerCommission: breakdown.monthlyBrokerCommission,
+        monthlyOwnerInterest: breakdown.monthlyOwnerInterest,
+      },
       note: {
         startDate: "This is the calculationStartDate. Interest is due every 30 days from this date.",
-        example: `startDate=${startDt.toISOString().slice(0, 10)} → first interest due on ${new Date(new Date(startDt).setMonth(startDt.getMonth() + 1)).toISOString().slice(0, 10)}`,
+        example: `amount=${invAmt}, totalRate=${intRate}%, brokerRate=${commRate}%, ownerRate=${ownerRate}% → customer pays ${breakdown.monthlyTotalInterest}/month (broker gets ${breakdown.monthlyBrokerCommission}, owner gets ${breakdown.monthlyOwnerInterest})`,
       },
     });
   } catch (err) {
@@ -229,19 +262,30 @@ export const getAllInvestments = async (req, res) => {
     const now = new Date();
 
     const withStatus = investments.map((inv) => {
+      const principal = Number(inv.investmentAmount || 0);
+      const totalRate = Number(inv.investmentInterestRate || 0);
+      const brokerRate = Number(inv.brokerCommissionRate || 0);
+      const ownerRate = totalRate - brokerRate;
+
+      const monthlyTotalInterest = (principal * totalRate) / 100;
+      const monthlyBrokerCommission = (principal * brokerRate) / 100;
+      const monthlyOwnerInterest = (principal * ownerRate) / 100;
+
       const cycles = completedCycles(inv.startDate, now);
-      const monthInt = (Number(inv.investmentAmount || 0) * Number(inv.investmentInterestRate || 0)) / 100;
-      const totalDueInterest = monthInt * cycles;
+      const totalDueInterest = monthlyTotalInterest * cycles;
       const interestPaid = Number(inv.interestPaidAmount || 0);
       const arrearsInterest = Math.max(totalDueInterest - interestPaid, 0);
 
-      // Next due date
       const nextDue = new Date(inv.startDate);
       nextDue.setMonth(nextDue.getMonth() + cycles + 1);
 
       return {
         ...inv,
         paymentStatus: calcPaymentStatus(inv),
+        ownerInterestRate: ownerRate,
+        monthlyTotalInterest: Number(monthlyTotalInterest.toFixed(2)),
+        monthlyBrokerCommission: Number(monthlyBrokerCommission.toFixed(2)),
+        monthlyOwnerInterest: Number(monthlyOwnerInterest.toFixed(2)),
         cycles,
         totalDueInterest: Number(totalDueInterest.toFixed(2)),
         arrearsInterest: Number(arrearsInterest.toFixed(2)),
@@ -278,10 +322,17 @@ export const getInvestmentById = async (req, res) => {
     }
 
     const now = new Date();
+    const principal = Number(investment.investmentAmount || 0);
+    const totalRate = Number(investment.investmentInterestRate || 0);
+    const brokerRate = Number(investment.brokerCommissionRate || 0);
+    const ownerRate = totalRate - brokerRate;
+
+    const monthlyTotalInterest = (principal * totalRate) / 100;
+    const monthlyBrokerCommission = (principal * brokerRate) / 100;
+    const monthlyOwnerInterest = (principal * ownerRate) / 100;
+
     const cycles = completedCycles(investment.startDate, now);
-    const monthInt =
-      (Number(investment.investmentAmount || 0) * Number(investment.investmentInterestRate || 0)) / 100;
-    const totalDueInterest = monthInt * cycles;
+    const totalDueInterest = monthlyTotalInterest * cycles;
     const interestPaid = Number(investment.interestPaidAmount || 0);
     const arrearsInterest = Math.max(totalDueInterest - interestPaid, 0);
 
@@ -293,12 +344,15 @@ export const getInvestmentById = async (req, res) => {
       data: {
         ...investment,
         paymentStatus: calcPaymentStatus(investment),
+        ownerInterestRate: ownerRate,
+        monthlyTotalInterest: Number(monthlyTotalInterest.toFixed(2)),
+        monthlyBrokerCommission: Number(monthlyBrokerCommission.toFixed(2)),
+        monthlyOwnerInterest: Number(monthlyOwnerInterest.toFixed(2)),
         cycles,
-        monthlyInterest: Number(monthInt.toFixed(2)),
         totalDueInterest: Number(totalDueInterest.toFixed(2)),
         arrearsInterest: Number(arrearsInterest.toFixed(2)),
         nextDueDate: nextDue,
-        note: `Interest due every 30 days from startDate. Completed cycles: ${cycles}`,
+        note: `Interest split: customer pays ${monthlyTotalInterest.toFixed(2)}/month (owner: ${monthlyOwnerInterest.toFixed(2)}, broker: ${monthlyBrokerCommission.toFixed(2)}). Completed cycles: ${cycles}`,
       },
     });
   } catch (err) {
@@ -349,6 +403,28 @@ export const updateInvestment = async (req, res) => {
       patch.brokerCommissionRate = v;
     }
 
+    // ✅ Validate that broker rate doesn't exceed total rate after update
+    const existing = await Investment.findById(id).lean();
+    if (!existing) {
+      return res.status(404).json({ success: false, message: "Investment not found" });
+    }
+
+    const finalTotalRate =
+      patch.investmentInterestRate !== undefined
+        ? patch.investmentInterestRate
+        : existing.investmentInterestRate;
+    const finalBrokerRate =
+      patch.brokerCommissionRate !== undefined
+        ? patch.brokerCommissionRate
+        : existing.brokerCommissionRate;
+
+    if (finalBrokerRate > finalTotalRate) {
+      return res.status(400).json({
+        success: false,
+        message: `brokerCommissionRate (${finalBrokerRate}%) cannot exceed investmentInterestRate (${finalTotalRate}%)`,
+      });
+    }
+
     if (startDate !== undefined) {
       const d = toDateOrFail(startDate);
       if (!d)
@@ -372,10 +448,19 @@ export const updateInvestment = async (req, res) => {
       return res.status(404).json({ success: false, message: "Investment not found" });
     }
 
+    const breakdown = buildMonthlyBreakdown(updated);
+
     return res.status(200).json({
       success: true,
       message: "Investment updated",
-      data: { ...updated, paymentStatus: calcPaymentStatus(updated) },
+      data: {
+        ...updated,
+        paymentStatus: calcPaymentStatus(updated),
+        ownerInterestRate: breakdown.ownerInterestRate,
+        monthlyTotalInterest: breakdown.monthlyTotalInterest,
+        monthlyBrokerCommission: breakdown.monthlyBrokerCommission,
+        monthlyOwnerInterest: breakdown.monthlyOwnerInterest,
+      },
     });
   } catch (err) {
     console.error("updateInvestment error:", err);
